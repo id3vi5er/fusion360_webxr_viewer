@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fusion 360 AR - Color</title>
+    <style>
+        body { margin: 0; background: #222; overflow: hidden; font-family: sans-serif; }
+    </style>
+</head>
+<body>
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
+        import { MTLLoader } from 'three/addons/loaders/MTLLoader.js'; // NEU
+        import { ARButton } from 'three/addons/webxr/ARButton.js';
+
+        let scene, camera, renderer, modelGroup;
+        let controller1, controller2;
+        let lastModified = null;
+        let hasSpawned = false;
+        
+        // State
+        const activeControllers = new Set();
+        const grabOffset = { pos: new THREE.Vector3(), rot: new THREE.Quaternion() };
+        
+        let initialDistance = 0;
+        let initialScale = 0.01;
+        let currentScale = 0.01;
+        const DEFAULT_SCALE = 0.01;
+        
+        // Debug Panel
+        let debugMesh, debugCtx, debugCanvas;
+        
+        init();
+        animate();
+
+        function init() {
+            scene = new THREE.Scene();
+            scene.background = null; 
+
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.01, 20);
+            
+            // Licht etwas anpassen für bessere Farbwiedergabe
+            const ambient = new THREE.AmbientLight(0xffffff, 0.6); // Weiches Grundlicht
+            scene.add(ambient);
+            const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
+            dirLight.position.set(2, 5, 2);
+            scene.add(dirLight);
+
+            modelGroup = new THREE.Group();
+            modelGroup.position.set(0, 0, -1); 
+            scene.add(modelGroup);
+            
+            createDebugPanel();
+
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            // Korrekte Farbraum-Einstellungen für PBR
+            renderer.outputColorSpace = THREE.SRGBColorSpace;
+            renderer.xr.enabled = true;
+            document.body.appendChild(renderer.domElement);
+
+            const arBtn = ARButton.createButton(renderer, { requiredFeatures: ['hit-test'] });
+            document.body.appendChild(arBtn);
+
+            // Controller
+            function setupController(idx) {
+                const ctrl = renderer.xr.getController(idx);
+                ctrl.addEventListener('selectstart', onSelectStart);
+                ctrl.addEventListener('selectend', onSelectEnd);
+                
+                const lineGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0,0,0), new THREE.Vector3(0,0,-0.05)]);
+                const line = new THREE.Line(lineGeo, new THREE.LineBasicMaterial({ color: 0xffffff }));
+                ctrl.add(line);
+                ctrl.userData.line = line;
+                
+                scene.add(ctrl);
+                return ctrl;
+            }
+
+            controller1 = setupController(0);
+            controller2 = setupController(1);
+
+            renderer.xr.addEventListener('sessionstart', () => { hasSpawned = false; });
+
+            loadModel();
+            setInterval(checkForUpdates, 3000);
+            window.addEventListener('resize', onWindowResize);
+        }
+
+        function createDebugPanel() {
+            debugCanvas = document.createElement('canvas');
+            debugCanvas.width = 512;
+            debugCanvas.height = 128;
+            debugCtx = debugCanvas.getContext('2d');
+            const tex = new THREE.CanvasTexture(debugCanvas);
+            const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0.9, depthTest: false });
+            const geo = new THREE.PlaneGeometry(0.3, 0.075);
+            debugMesh = new THREE.Mesh(geo, mat);
+            debugMesh.renderOrder = 999; 
+            scene.add(debugMesh);
+        }
+
+        function updateDebugText(text) {
+            if (!debugCtx) return;
+            debugCtx.clearRect(0, 0, 512, 128);
+            debugCtx.fillStyle = 'rgba(10,10,10,0.8)';
+            debugCtx.fillRect(0, 0, 512, 128);
+            debugCtx.fillStyle = '#00ff00';
+            debugCtx.font = '30px monospace';
+            debugCtx.fillText(text, 20, 70);
+            if (debugMesh.material.map) debugMesh.material.map.needsUpdate = true;
+        }
+
+        function onSelectStart(event) {
+            const ctrl = event.target;
+            activeControllers.add(ctrl);
+            if(ctrl.userData.line) ctrl.userData.line.material.color.set(0x00ff00);
+            updateGrabState();
+        }
+
+        function onSelectEnd(event) {
+            const ctrl = event.target;
+            activeControllers.delete(ctrl);
+            if(ctrl.userData.line) ctrl.userData.line.material.color.set(0xffffff);
+            updateGrabState();
+        }
+
+        function updateGrabState() {
+            const ctrls = Array.from(activeControllers);
+            
+            if (ctrls.length === 1) {
+                const ctrl = ctrls[0];
+                const invCtrlRot = ctrl.quaternion.clone().invert();
+                
+                grabOffset.pos.copy(modelGroup.position).sub(ctrl.position).applyQuaternion(invCtrlRot);
+                grabOffset.rot.copy(invCtrlRot).multiply(modelGroup.quaternion);
+                updateDebugText("Grab: 1 Hand");
+            } 
+            else if (ctrls.length === 2) {
+                initialDistance = ctrls[0].position.distanceTo(ctrls[1].position);
+                initialScale = currentScale;
+                
+                const midPoint = new THREE.Vector3().addVectors(ctrls[0].position, ctrls[1].position).multiplyScalar(0.5);
+                const refRot = ctrls[0].quaternion.clone();
+                const invRefRot = refRot.clone().invert();
+                
+                grabOffset.pos.copy(modelGroup.position).sub(midPoint).applyQuaternion(invRefRot);
+                grabOffset.rot.copy(invRefRot).multiply(modelGroup.quaternion);
+                updateDebugText("Scale: 2 Hands");
+            } else {
+                updateDebugText("Ready");
+            }
+        }
+
+        // --- NEUER LOADER (MTL + OBJ) ---
+        async function loadModel() {
+            updateDebugText("Lade Materialien...");
+            
+            const mtlLoader = new MTLLoader();
+            
+            // Erst MTL laden
+            mtlLoader.load('./model.mtl?t=' + Date.now(), 
+                (materials) => {
+                    materials.preload();
+                    
+                    const objLoader = new OBJLoader();
+                    objLoader.setMaterials(materials); // Materialien zuweisen
+                    
+                    updateDebugText("Lade Geometrie...");
+                    
+                    // Dann OBJ laden
+                    objLoader.load('./model.obj?t=' + Date.now(), 
+                        (obj) => {
+                            while(modelGroup.children.length > 0) modelGroup.remove(modelGroup.children[0]);
+                            
+                            obj.scale.set(currentScale, currentScale, currentScale);
+                            
+                            // WICHTIG: KEIN manuelles Überschreiben der Materialien mehr!
+                            // Wir vertrauen auf die MTL-Definitionen.
+                            
+                            const box = new THREE.Box3().setFromObject(obj);
+                            const center = box.getCenter(new THREE.Vector3());
+                            obj.position.sub(center);
+                            
+                            modelGroup.add(obj);
+                            updateDebugText("Modell (Farbe) geladen");
+                        },
+                        undefined,
+                        (err) => {
+                            updateDebugText("Fehler OBJ Load");
+                        }
+                    );
+                },
+                (xhr) => {},
+                (err) => {
+                    // Fallback: Wenn keine MTL da ist, laden wir nur OBJ (grau)
+                    updateDebugText("Keine MTL gefunden. Lade grau.");
+                    new OBJLoader().load('./model.obj?t=' + Date.now(), (obj) => {
+                        while(modelGroup.children.length > 0) modelGroup.remove(modelGroup.children[0]);
+                        obj.scale.set(currentScale, currentScale, currentScale);
+                        obj.traverse(c => { if(c.isMesh) c.material = new THREE.MeshStandardMaterial({color: 0xcccccc}); });
+                        const box = new THREE.Box3().setFromObject(obj);
+                        const center = box.getCenter(new THREE.Vector3());
+                        obj.position.sub(center);
+                        modelGroup.add(obj);
+                    });
+                }
+            );
+        }
+
+        async function checkForUpdates() {
+            try {
+                // Wir checken auf Änderungen der OBJ Datei
+                const res = await fetch('./model.obj', { method: 'HEAD' });
+                if (res.ok) {
+                    const mod = res.headers.get('Last-Modified');
+                    if (lastModified && lastModified !== mod) loadModel();
+                    lastModified = mod;
+                }
+            } catch (e) {}
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+        
+        function handleInput() {
+            const session = renderer.xr.getSession();
+            let resetPressed = false;
+            if (session) {
+                for (const source of session.inputSources) {
+                    if (source.gamepad) {
+                        source.gamepad.buttons.forEach((btn, idx) => {
+                            // Wir prüfen NUR auf Button 5 (Y)
+                            if (btn.pressed && idx === 5) resetPressed = true;
+                        });
+                    }
+                }
+            }
+            if (resetPressed) {
+                currentScale = DEFAULT_SCALE;
+                modelGroup.children.forEach(c => c.scale.set(currentScale, currentScale, currentScale));
+                updateDebugText("Scale Reset");
+            }
+        }
+
+        function animate() {
+            renderer.setAnimationLoop(() => {
+                if (debugMesh && camera) {
+                    const offset = new THREE.Vector3(-0.15, 0.1, -0.5); 
+                    offset.applyQuaternion(camera.quaternion);
+                    debugMesh.position.copy(camera.position).add(offset);
+                    debugMesh.quaternion.copy(camera.quaternion);
+                }
+
+                if (renderer.xr.isPresenting && !hasSpawned) {
+                    const camPos = new THREE.Vector3().setFromMatrixPosition(camera.matrixWorld);
+                    if (camPos.y > 0.0 || performance.now() > 3000) { 
+                        const dir = new THREE.Vector3();
+                        camera.getWorldDirection(dir);
+                        dir.y = 0; dir.normalize();
+                        const spawnPos = camPos.clone().add(dir.multiplyScalar(0.5));
+                        modelGroup.position.copy(spawnPos);
+                        modelGroup.lookAt(camPos.x, modelGroup.position.y, camPos.z);
+                        hasSpawned = true;
+                    }
+                }
+
+                handleInput();
+
+                const ctrls = Array.from(activeControllers);
+                if (ctrls.length === 1) {
+                    const ctrl = ctrls[0];
+                    const rotOffset = grabOffset.pos.clone().applyQuaternion(ctrl.quaternion);
+                    modelGroup.position.copy(ctrl.position).add(rotOffset);
+                    modelGroup.quaternion.copy(ctrl.quaternion).multiply(grabOffset.rot);
+                }
+                else if (ctrls.length === 2) {
+                    const c1 = ctrls[0];
+                    const c2 = ctrls[1];
+                    const currentDist = c1.position.distanceTo(c2.position);
+                    const scaleFactor = currentDist / initialDistance;
+                    currentScale = initialScale * scaleFactor;
+                    currentScale = Math.max(0.001, Math.min(currentScale, 5.0));
+                    
+                    modelGroup.children.forEach(child => {
+                        child.scale.set(currentScale, currentScale, currentScale);
+                    });
+                    
+                    const midPoint = new THREE.Vector3().addVectors(c1.position, c2.position).multiplyScalar(0.5);
+                    const refRot = c1.quaternion;
+                    const rotOffset = grabOffset.pos.clone().applyQuaternion(refRot);
+                    modelGroup.position.copy(midPoint).add(rotOffset);
+                    modelGroup.quaternion.copy(refRot).multiply(grabOffset.rot);
+                }
+
+                renderer.render(scene, camera);
+            });
+        }
+    </script>
+</body>
+</html>
