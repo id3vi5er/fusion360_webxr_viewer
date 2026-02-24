@@ -1,0 +1,8 @@
+{
+	"autodeskProduct":	"Fusion360",
+	"type":	"script",
+	"author":	"Senior Dev",
+	"description":	"Exports active design as GLB for WebXR streaming",
+	"supportedOS":	"windows|mac",
+	"editEnabled":	true
+}
