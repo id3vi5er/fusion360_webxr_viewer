@@ -203,7 +203,7 @@ class ExportCommandExecuteHandler(adsk.core.CommandEventHandler):
             if os.path.exists(obj_path): os.remove(obj_path)
             if os.path.exists(mtl_path): os.remove(mtl_path)
 
-            # Export
+            # Export (Fusion exportiert automatisch nur sichtbare Geometrie)
             export_mgr = design.exportManager
             options = export_mgr.createOBJExportOptions(design.rootComponent, obj_path)
             success = export_mgr.execute(options)
