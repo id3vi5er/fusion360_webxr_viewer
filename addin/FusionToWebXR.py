@@ -13,7 +13,6 @@ import sys
 SERVER_THREAD = None
 SERVER_HTTPD = None
 SERVER_RUNNING = False
-SERVER_IP = "127.0.0.1"
 SERVER_PORT = 8000
 
 # Pfade relativ zum Script
@@ -52,22 +51,44 @@ class CORSSSLRequestHandler(http.server.SimpleHTTPRequestHandler):
         rel_path = os.path.relpath(path, os.getcwd())
         return os.path.join(WWW_DIR, rel_path)
 
-def get_local_ip():
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+def get_all_ips():
+    ip_list = []
     try:
-        # doesn't even have to be reachable
-        s.connect(('10.255.255.255', 1))
-        IP = s.getsockname()[0]
+        # Get all network interfaces
+        hostname = socket.gethostname()
+        # Get all addresses for the hostname
+        infos = socket.getaddrinfo(hostname, None, socket.AF_INET)
+        
+        for info in infos:
+            ip = info[4][0]
+            if ip != '127.0.0.1' and not ip.startswith('169.254'):
+                if ip not in ip_list:
+                    ip_list.append(ip)
+        
+        # Fallback if no real IP found
+        if not ip_list:
+            # Try the connection method as backup
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                s.connect(('10.255.255.255', 1))
+                ip = s.getsockname()[0]
+                if ip != '127.0.0.1':
+                    ip_list.append(ip)
+            except:
+                pass
+            finally:
+                s.close()
+                
+        if not ip_list:
+            ip_list.append('127.0.0.1')
+            
     except Exception:
-        IP = '127.0.0.1'
-    finally:
-        s.close()
-    return IP
+        ip_list = ['127.0.0.1']
+        
+    return ip_list
 
 def server_worker():
-    global SERVER_HTTPD, SERVER_RUNNING, SERVER_IP
-    
-    SERVER_IP = get_local_ip()
+    global SERVER_HTTPD, SERVER_RUNNING
     
     # Change CWD to WWW_DIR so SimpleHTTPRequestHandler serves correct files
     # Note: Changing CWD in a thread might be risky in Fusion, but translate_path handles it better usually.
@@ -124,9 +145,22 @@ class StartServerCommandExecuteHandler(adsk.core.CommandEventHandler):
         try:
             if not SERVER_RUNNING:
                 start_server_thread()
-                ui.messageBox(f"Server gestartet!\n\nURL: https://{SERVER_IP}:{SERVER_PORT}\n\n(Zertifikat akzeptieren!)")
+                
+                ips = get_all_ips()
+                msg = "Server gestartet!\n\nMögliche URLs:\n"
+                for ip in ips:
+                    msg += f"- https://{ip}:{SERVER_PORT}\n"
+                
+                msg += "\n(Zertifikat im Browser akzeptieren!)"
+                
+                ui.messageBox(msg)
             else:
-                ui.messageBox(f"Server läuft bereits.\n\nURL: https://{SERVER_IP}:{SERVER_PORT}")
+                ips = get_all_ips()
+                msg = "Server läuft bereits.\n\nMögliche URLs:\n"
+                for ip in ips:
+                    msg += f"- https://{ip}:{SERVER_PORT}\n"
+                    
+                ui.messageBox(msg)
         except:
             ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
 
