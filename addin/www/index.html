@@ -6,9 +6,27 @@
     <title>Fusion 360 AR - Color</title>
     <style>
         body { margin: 0; background: #222; overflow: hidden; font-family: sans-serif; }
+        #status-overlay {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(20, 20, 20, 0.85);
+            color: #fff;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 14px;
+            font-weight: 500;
+            pointer-events: none;
+            backdrop-filter: blur(4px);
+            z-index: 1000;
+            transition: opacity 0.3s;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }
     </style>
 </head>
 <body>
+    <div id="status-overlay" role="status" aria-live="polite">Initializing...</div>
     <script type="importmap">
         {
             "imports": {
@@ -71,7 +89,11 @@
             renderer.xr.enabled = true;
             document.body.appendChild(renderer.domElement);
 
-            const arBtn = ARButton.createButton(renderer, { requiredFeatures: ['hit-test'] });
+            const arBtn = ARButton.createButton(renderer, {
+                requiredFeatures: ['hit-test'],
+                optionalFeatures: ['dom-overlay'],
+                domOverlay: { root: document.body }
+            });
             document.body.appendChild(arBtn);
 
             // Controller
@@ -113,6 +135,9 @@
         }
 
         function updateDebugText(text) {
+            const overlay = document.getElementById('status-overlay');
+            if (overlay) overlay.textContent = text;
+
             if (!debugCtx) return;
             debugCtx.clearRect(0, 0, 512, 128);
             debugCtx.fillStyle = 'rgba(10,10,10,0.8)';
