@@ -83,6 +83,3 @@ WebXR requires a Secure Context (HTTPS). Since Fusion's internal Python environm
 *   **Frontend:** `addin/www/index.html` (Vanilla JS + Three.js). No build step required.
 *   **Backend:** Python `http.server` wrapped in `ssl` (implemented in `FusionToWebXR.py`).
 *   **Icons:** `addin/resources/` (PNGs).
-
-## License
-MIT
