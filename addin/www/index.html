@@ -6,9 +6,53 @@
     <title>Fusion 360 AR - Color</title>
     <style>
         body { margin: 0; background: #222; overflow: hidden; font-family: sans-serif; }
+
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-end; /* Bottom alignment */
+            align-items: center;
+            padding-bottom: 80px; /* Space for AR Button */
+            z-index: 1000;
+            box-sizing: border-box;
+        }
+
+        #status-panel {
+            background: rgba(20, 20, 20, 0.85);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            color: white;
+            padding: 12px 24px;
+            border-radius: 999px;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            font-size: 14px;
+            font-weight: 500;
+            letter-spacing: 0.5px;
+            transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+            text-align: center;
+            opacity: 0;
+            transform: translateY(10px);
+        }
+
+        #status-panel.visible {
+            opacity: 1;
+            transform: translateY(0);
+        }
     </style>
 </head>
 <body>
+    <div id="ui-layer">
+        <div id="status-panel">Initializing...</div>
+    </div>
+
     <script type="importmap">
         {
             "imports": {
@@ -38,9 +82,6 @@
         let currentScale = 0.01;
         const DEFAULT_SCALE = 0.01;
         
-        // Debug Panel
-        let debugMesh, debugCtx, debugCanvas;
-        
         init();
         animate();
 
@@ -61,7 +102,7 @@
             modelGroup.position.set(0, 0, -1); 
             scene.add(modelGroup);
             
-            createDebugPanel();
+            // Debug panel removed in favor of DOM overlay
 
             renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
             renderer.setPixelRatio(window.devicePixelRatio);
@@ -71,7 +112,11 @@
             renderer.xr.enabled = true;
             document.body.appendChild(renderer.domElement);
 
-            const arBtn = ARButton.createButton(renderer, { requiredFeatures: ['hit-test'] });
+            const arBtn = ARButton.createButton(renderer, {
+                requiredFeatures: ['hit-test'],
+                optionalFeatures: ['dom-overlay'],
+                domOverlay: { root: document.getElementById('ui-layer') }
+            });
             document.body.appendChild(arBtn);
 
             // Controller
@@ -99,28 +144,12 @@
             window.addEventListener('resize', onWindowResize);
         }
 
-        function createDebugPanel() {
-            debugCanvas = document.createElement('canvas');
-            debugCanvas.width = 512;
-            debugCanvas.height = 128;
-            debugCtx = debugCanvas.getContext('2d');
-            const tex = new THREE.CanvasTexture(debugCanvas);
-            const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0.9, depthTest: false });
-            const geo = new THREE.PlaneGeometry(0.3, 0.075);
-            debugMesh = new THREE.Mesh(geo, mat);
-            debugMesh.renderOrder = 999; 
-            scene.add(debugMesh);
-        }
-
         function updateDebugText(text) {
-            if (!debugCtx) return;
-            debugCtx.clearRect(0, 0, 512, 128);
-            debugCtx.fillStyle = 'rgba(10,10,10,0.8)';
-            debugCtx.fillRect(0, 0, 512, 128);
-            debugCtx.fillStyle = '#00ff00';
-            debugCtx.font = '30px monospace';
-            debugCtx.fillText(text, 20, 70);
-            if (debugMesh.material.map) debugMesh.material.map.needsUpdate = true;
+            const panel = document.getElementById('status-panel');
+            if (panel) {
+                panel.textContent = text;
+                panel.classList.add('visible');
+            }
         }
 
         function onSelectStart(event) {
@@ -260,13 +289,6 @@
 
         function animate() {
             renderer.setAnimationLoop(() => {
-                if (debugMesh && camera) {
-                    const offset = new THREE.Vector3(-0.15, 0.1, -0.5); 
-                    offset.applyQuaternion(camera.quaternion);
-                    debugMesh.position.copy(camera.position).add(offset);
-                    debugMesh.quaternion.copy(camera.quaternion);
-                }
-
                 if (renderer.xr.isPresenting && !hasSpawned) {
                     const camPos = new THREE.Vector3().setFromMatrixPosition(camera.matrixWorld);
                     if (camPos.y > 0.0 || performance.now() > 3000) { 
