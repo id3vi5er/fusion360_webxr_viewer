@@ -1,0 +1,3 @@
+## 2026-02-26 - Fullscreen Flex Overlays & Box Sizing
+**Learning:** When creating a full-viewport overlay (`height: 100%`) with `padding-bottom` to position bottom-aligned flex items above UI chrome (like an AR Button), the default `box-sizing: content-box` causes the container to overflow the viewport by the padding amount. This results in the bottom content being pushed to the very edge (or clipped), ignoring the intended padding offset.
+**Action:** Always apply `box-sizing: border-box` to full-screen overlay containers that use padding for layout positioning to ensure the padding is subtracted from the available height, keeping content within the viewport bounds.
