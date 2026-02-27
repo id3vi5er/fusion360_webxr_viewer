@@ -1,0 +1,15 @@
+127.0.0.1 - - [27/Feb/2026 00:56:07] "GET /index.html HTTP/1.1" 200 -
+127.0.0.1 - - [27/Feb/2026 00:56:08] code 404, message File not found
+127.0.0.1 - - [27/Feb/2026 00:56:08] "GET /model.mtl?t=1772153768318 HTTP/1.1" 404 -
+127.0.0.1 - - [27/Feb/2026 00:56:08] code 404, message File not found
+127.0.0.1 - - [27/Feb/2026 00:56:08] "GET /model.obj?t=1772153768975 HTTP/1.1" 404 -
+127.0.0.1 - - [27/Feb/2026 00:57:44] "GET /index.html HTTP/1.1" 200 -
+127.0.0.1 - - [27/Feb/2026 00:57:44] code 404, message File not found
+127.0.0.1 - - [27/Feb/2026 00:57:44] "GET /model.mtl?t=1772153864749 HTTP/1.1" 404 -
+127.0.0.1 - - [27/Feb/2026 00:57:45] code 404, message File not found
+127.0.0.1 - - [27/Feb/2026 00:57:45] "GET /model.obj?t=1772153865247 HTTP/1.1" 404 -
+127.0.0.1 - - [27/Feb/2026 00:58:49] "GET /index.html HTTP/1.1" 200 -
+127.0.0.1 - - [27/Feb/2026 00:58:49] code 404, message File not found
+127.0.0.1 - - [27/Feb/2026 00:58:49] "GET /model.mtl?t=1772153929397 HTTP/1.1" 404 -
+127.0.0.1 - - [27/Feb/2026 00:58:49] code 404, message File not found
+127.0.0.1 - - [27/Feb/2026 00:58:49] "GET /model.obj?t=1772153929578 HTTP/1.1" 404 -

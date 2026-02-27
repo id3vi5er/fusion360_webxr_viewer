@@ -6,9 +6,42 @@
     <title>Fusion 360 AR - Color</title>
     <style>
         body { margin: 0; background: #222; overflow: hidden; font-family: sans-serif; }
+
+        /* WebXR DOM Overlay */
+        #status-overlay {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: flex-end;
+            padding-bottom: 20%;
+        }
+
+        .toast {
+            background: rgba(20, 20, 20, 0.9);
+            color: #eee;
+            padding: 12px 24px;
+            border-radius: 30px;
+            font-size: 16px;
+            font-weight: 500;
+            opacity: 0;
+            transition: opacity 0.5s ease;
+            pointer-events: auto;
+            border: 1px solid rgba(255,255,255,0.2);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }
+
+        .toast.show {
+            opacity: 1;
+        }
     </style>
 </head>
 <body>
+    <div id="status-overlay">
+        <div id="toast" class="toast" role="status" aria-live="polite">Ready</div>
+    </div>
     <script type="importmap">
         {
             "imports": {
@@ -71,8 +104,14 @@
             renderer.xr.enabled = true;
             document.body.appendChild(renderer.domElement);
 
-            const arBtn = ARButton.createButton(renderer, { requiredFeatures: ['hit-test'] });
-            document.body.appendChild(arBtn);
+            // Configure WebXR DOM Overlay
+            const overlayRoot = document.getElementById('status-overlay');
+            const arBtn = ARButton.createButton(renderer, {
+                requiredFeatures: ['hit-test'],
+                optionalFeatures: ['dom-overlay'],
+                domOverlay: { root: overlayRoot }
+            });
+            overlayRoot.appendChild(arBtn);
 
             // Controller
             function setupController(idx) {
@@ -164,9 +203,23 @@
             }
         }
 
+        function showToast(msg) {
+            const toast = document.getElementById('toast');
+            if (toast) {
+                toast.textContent = msg;
+                toast.classList.add('show');
+                // Auto hide after 3s
+                if (toast.timeout) clearTimeout(toast.timeout);
+                toast.timeout = setTimeout(() => {
+                    toast.classList.remove('show');
+                }, 3000);
+            }
+        }
+
         // --- NEUER LOADER (MTL + OBJ) ---
         async function loadModel() {
             updateDebugText("Lade Materialien...");
+            showToast("Loading model...");
             
             const mtlLoader = new MTLLoader();
             
@@ -196,10 +249,12 @@
                             
                             modelGroup.add(obj);
                             updateDebugText("Modell (Farbe) geladen");
+                            showToast("Model updated!");
                         },
                         undefined,
                         (err) => {
                             updateDebugText("Fehler OBJ Load");
+                            showToast("Error loading model");
                         }
                     );
                 },
@@ -215,6 +270,7 @@
                         const center = box.getCenter(new THREE.Vector3());
                         obj.position.sub(center);
                         modelGroup.add(obj);
+                        showToast("Model updated (no materials)");
                     });
                 }
             );
