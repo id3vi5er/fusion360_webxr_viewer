@@ -6,9 +6,14 @@
     <title>Fusion 360 AR - Color</title>
     <style>
         body { margin: 0; background: #222; overflow: hidden; font-family: sans-serif; }
+        #overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 999; }
+        #toast { position: absolute; bottom: 80px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.8); color: white; padding: 10px 20px; border-radius: 20px; font-family: sans-serif; pointer-events: auto; opacity: 0; transition: opacity 0.3s; }
     </style>
 </head>
 <body>
+    <div id="overlay">
+        <div id="toast" role="status" aria-live="polite"></div>
+    </div>
     <script type="importmap">
         {
             "imports": {
@@ -71,7 +76,7 @@
             renderer.xr.enabled = true;
             document.body.appendChild(renderer.domElement);
 
-            const arBtn = ARButton.createButton(renderer, { requiredFeatures: ['hit-test'] });
+            const arBtn = ARButton.createButton(renderer, { requiredFeatures: ['hit-test', 'dom-overlay'], domOverlay: { root: document.getElementById('overlay') } });
             document.body.appendChild(arBtn);
 
             // Controller
@@ -112,6 +117,18 @@
             scene.add(debugMesh);
         }
 
+        let toastTimeout;
+        function showToast(message) {
+            const toast = document.getElementById('toast');
+            if (!toast) return;
+            toast.textContent = message;
+            toast.style.opacity = '1';
+            clearTimeout(toastTimeout);
+            toastTimeout = setTimeout(() => {
+                toast.style.opacity = '0';
+            }, 3000);
+        }
+
         function updateDebugText(text) {
             if (!debugCtx) return;
             debugCtx.clearRect(0, 0, 512, 128);
@@ -121,6 +138,8 @@
             debugCtx.font = '30px monospace';
             debugCtx.fillText(text, 20, 70);
             if (debugMesh.material.map) debugMesh.material.map.needsUpdate = true;
+
+            showToast(text);
         }
 
         function onSelectStart(event) {
