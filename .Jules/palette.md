@@ -1,0 +1,3 @@
+## 2024-05-24 - Accessible Notifications in WebXR
+**Learning:** Providing accessible notifications in WebXR requires using the `dom-overlay` feature to display an HTML container. Simply drawing text onto a 3D canvas (like Three.js) is invisible to screen readers. Placing an ARIA-live region (like a toast notification) in a DOM overlay makes the status accessible to screen readers while using AR.
+**Action:** When creating WebXR applications, use `dom-overlay` for critical text/status updates, ensuring the overlay container has `role="status"` and `aria-live="polite"`.
