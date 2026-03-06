@@ -6,9 +6,41 @@
     <title>Fusion 360 AR - Color</title>
     <style>
         body { margin: 0; background: #222; overflow: hidden; font-family: sans-serif; }
+
+        /* UI Overlay */
+        #overlay-root {
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            pointer-events: none;
+            display: flex;
+            justify-content: center;
+            align-items: flex-end;
+            z-index: 1000;
+        }
+        #toast {
+            background: rgba(10, 10, 10, 0.8);
+            color: #00ff00;
+            padding: 10px 20px;
+            border-radius: 8px;
+            margin-bottom: 80px;
+            font-family: monospace;
+            font-size: 16px;
+            pointer-events: auto;
+            opacity: 0;
+            transition: opacity 0.3s ease-in-out;
+            border: 1px solid #333;
+        }
+        #toast.visible {
+            opacity: 1;
+        }
     </style>
 </head>
 <body>
+
+    <div id="overlay-root">
+        <div id="toast" role="status" aria-live="polite">Ready</div>
+    </div>
+
     <script type="importmap">
         {
             "imports": {
@@ -71,7 +103,12 @@
             renderer.xr.enabled = true;
             document.body.appendChild(renderer.domElement);
 
-            const arBtn = ARButton.createButton(renderer, { requiredFeatures: ['hit-test'] });
+            const overlayRoot = document.getElementById('overlay-root');
+            const arBtn = ARButton.createButton(renderer, {
+                requiredFeatures: ['hit-test'],
+                optionalFeatures: ['dom-overlay'],
+                domOverlay: { root: overlayRoot }
+            });
             document.body.appendChild(arBtn);
 
             // Controller
@@ -112,15 +149,30 @@
             scene.add(debugMesh);
         }
 
+        let toastTimeout;
         function updateDebugText(text) {
-            if (!debugCtx) return;
-            debugCtx.clearRect(0, 0, 512, 128);
-            debugCtx.fillStyle = 'rgba(10,10,10,0.8)';
-            debugCtx.fillRect(0, 0, 512, 128);
-            debugCtx.fillStyle = '#00ff00';
-            debugCtx.font = '30px monospace';
-            debugCtx.fillText(text, 20, 70);
-            if (debugMesh.material.map) debugMesh.material.map.needsUpdate = true;
+            // Update 3D Debug Panel
+            if (debugCtx) {
+                debugCtx.clearRect(0, 0, 512, 128);
+                debugCtx.fillStyle = 'rgba(10,10,10,0.8)';
+                debugCtx.fillRect(0, 0, 512, 128);
+                debugCtx.fillStyle = '#00ff00';
+                debugCtx.font = '30px monospace';
+                debugCtx.fillText(text, 20, 70);
+                if (debugMesh.material.map) debugMesh.material.map.needsUpdate = true;
+            }
+
+            // Update 2D Accessible Toast
+            const toast = document.getElementById('toast');
+            if (toast) {
+                toast.textContent = text;
+                toast.classList.add('visible');
+
+                clearTimeout(toastTimeout);
+                toastTimeout = setTimeout(() => {
+                    toast.classList.remove('visible');
+                }, 3000);
+            }
         }
 
         function onSelectStart(event) {
