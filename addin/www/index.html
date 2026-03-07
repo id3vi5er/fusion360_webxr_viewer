@@ -6,9 +6,21 @@
     <title>Fusion 360 AR - Color</title>
     <style>
         body { margin: 0; background: #222; overflow: hidden; font-family: sans-serif; }
+        #dom-overlay { pointer-events: none; width: 100vw; height: 100vh; position: absolute; z-index: 2; }
+        #toast-container {
+            position: absolute; bottom: 80px; left: 50%; transform: translateX(-50%);
+            background: rgba(10, 10, 10, 0.9); color: #00ff00;
+            padding: 10px 20px; border-radius: 8px; font-family: monospace; font-size: 16px;
+            pointer-events: auto; opacity: 0; transition: opacity 0.3s;
+            text-align: center; border: 1px solid #00ff00;
+        }
+        #toast-container.visible { opacity: 1; }
     </style>
 </head>
 <body>
+    <div id="dom-overlay">
+        <div id="toast-container" role="status" aria-live="polite">Ready</div>
+    </div>
     <script type="importmap">
         {
             "imports": {
@@ -40,6 +52,7 @@
         
         // Debug Panel
         let debugMesh, debugCtx, debugCanvas;
+        let toastTimeout = null;
         
         init();
         animate();
@@ -71,7 +84,11 @@
             renderer.xr.enabled = true;
             document.body.appendChild(renderer.domElement);
 
-            const arBtn = ARButton.createButton(renderer, { requiredFeatures: ['hit-test'] });
+            const arBtn = ARButton.createButton(renderer, {
+                requiredFeatures: ['hit-test'],
+                optionalFeatures: ['dom-overlay'],
+                domOverlay: { root: document.getElementById('dom-overlay') }
+            });
             document.body.appendChild(arBtn);
 
             // Controller
@@ -121,6 +138,17 @@
             debugCtx.font = '30px monospace';
             debugCtx.fillText(text, 20, 70);
             if (debugMesh.material.map) debugMesh.material.map.needsUpdate = true;
+
+            // Show toast
+            const toast = document.getElementById('toast-container');
+            if (toast) {
+                toast.textContent = text;
+                toast.classList.add('visible');
+                if (toastTimeout) clearTimeout(toastTimeout);
+                toastTimeout = setTimeout(() => {
+                    toast.classList.remove('visible');
+                }, 3000);
+            }
         }
 
         function onSelectStart(event) {
