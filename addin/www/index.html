@@ -6,9 +6,36 @@
     <title>Fusion 360 AR - Color</title>
     <style>
         body { margin: 0; background: #222; overflow: hidden; font-family: sans-serif; }
+        #overlay-root {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 9999;
+            display: flex;
+            justify-content: center;
+            align-items: flex-end;
+        }
+        #toast {
+            pointer-events: auto;
+            margin-bottom: 80px;
+            background: rgba(0,0,0,0.8);
+            color: white;
+            padding: 10px 20px;
+            border-radius: 8px;
+            text-align: center;
+            opacity: 0;
+            transition: opacity 0.3s;
+            font-size: 16px;
+        }
     </style>
 </head>
 <body>
+    <div id="overlay-root">
+        <div id="toast" role="status" aria-live="polite"></div>
+    </div>
     <script type="importmap">
         {
             "imports": {
@@ -71,7 +98,11 @@
             renderer.xr.enabled = true;
             document.body.appendChild(renderer.domElement);
 
-            const arBtn = ARButton.createButton(renderer, { requiredFeatures: ['hit-test'] });
+            const arBtn = ARButton.createButton(renderer, {
+                requiredFeatures: ['hit-test'],
+                optionalFeatures: ['dom-overlay'],
+                domOverlay: { root: document.getElementById('overlay-root') }
+            });
             document.body.appendChild(arBtn);
 
             // Controller
@@ -112,6 +143,7 @@
             scene.add(debugMesh);
         }
 
+        let toastTimeout;
         function updateDebugText(text) {
             if (!debugCtx) return;
             debugCtx.clearRect(0, 0, 512, 128);
@@ -121,6 +153,16 @@
             debugCtx.font = '30px monospace';
             debugCtx.fillText(text, 20, 70);
             if (debugMesh.material.map) debugMesh.material.map.needsUpdate = true;
+
+            const toast = document.getElementById('toast');
+            if (toast) {
+                toast.innerText = text;
+                toast.style.opacity = '1';
+                if (toastTimeout) clearTimeout(toastTimeout);
+                toastTimeout = setTimeout(() => {
+                    toast.style.opacity = '0';
+                }, 3000);
+            }
         }
 
         function onSelectStart(event) {
