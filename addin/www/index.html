@@ -9,6 +9,10 @@
     </style>
 </head>
 <body>
+    <div id="ui-overlay" style="pointer-events: none; position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 1000;">
+        <div id="toast" role="status" aria-live="polite" style="position: absolute; bottom: 80px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.8); color: white; padding: 10px 20px; border-radius: 20px; font-family: sans-serif; opacity: 0; transition: opacity 0.3s; pointer-events: auto;">
+        </div>
+    </div>
     <script type="importmap">
         {
             "imports": {
@@ -71,7 +75,11 @@
             renderer.xr.enabled = true;
             document.body.appendChild(renderer.domElement);
 
-            const arBtn = ARButton.createButton(renderer, { requiredFeatures: ['hit-test'] });
+            const arBtn = ARButton.createButton(renderer, {
+                requiredFeatures: ['hit-test'],
+                optionalFeatures: ['dom-overlay'],
+                domOverlay: { root: document.getElementById('ui-overlay') }
+            });
             document.body.appendChild(arBtn);
 
             // Controller
@@ -112,15 +120,29 @@
             scene.add(debugMesh);
         }
 
+        let toastTimeout;
         function updateDebugText(text) {
-            if (!debugCtx) return;
-            debugCtx.clearRect(0, 0, 512, 128);
-            debugCtx.fillStyle = 'rgba(10,10,10,0.8)';
-            debugCtx.fillRect(0, 0, 512, 128);
-            debugCtx.fillStyle = '#00ff00';
-            debugCtx.font = '30px monospace';
-            debugCtx.fillText(text, 20, 70);
-            if (debugMesh.material.map) debugMesh.material.map.needsUpdate = true;
+            if (debugCtx) {
+                debugCtx.clearRect(0, 0, 512, 128);
+                debugCtx.fillStyle = 'rgba(10,10,10,0.8)';
+                debugCtx.fillRect(0, 0, 512, 128);
+                debugCtx.fillStyle = '#00ff00';
+                debugCtx.font = '30px monospace';
+                debugCtx.fillText(text, 20, 70);
+                if (debugMesh.material.map) debugMesh.material.map.needsUpdate = true;
+            }
+
+            // Sync to 2D Toast for Accessibility
+            const toast = document.getElementById('toast');
+            if (toast) {
+                toast.textContent = text;
+                toast.style.opacity = '1';
+
+                clearTimeout(toastTimeout);
+                toastTimeout = setTimeout(() => {
+                    toast.style.opacity = '0';
+                }, 3000);
+            }
         }
 
         function onSelectStart(event) {
