@@ -6,9 +6,14 @@
     <title>Fusion 360 AR - Color</title>
     <style>
         body { margin: 0; background: #222; overflow: hidden; font-family: sans-serif; }
+        #ar-overlay { pointer-events: none; position: absolute; bottom: 0; width: 100%; height: 100%; z-index: 1000; }
+        #ar-status { pointer-events: auto; position: absolute; bottom: 80px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.8); color: white; padding: 10px 20px; border-radius: 8px; font-family: monospace; display: none; }
     </style>
 </head>
 <body>
+    <div id="ar-overlay">
+        <div id="ar-status" role="status" aria-live="polite"></div>
+    </div>
     <script type="importmap">
         {
             "imports": {
@@ -71,7 +76,11 @@
             renderer.xr.enabled = true;
             document.body.appendChild(renderer.domElement);
 
-            const arBtn = ARButton.createButton(renderer, { requiredFeatures: ['hit-test'] });
+            const arBtn = ARButton.createButton(renderer, {
+                requiredFeatures: ['hit-test'],
+                optionalFeatures: ['dom-overlay'],
+                domOverlay: { root: document.getElementById('ar-overlay') }
+            });
             document.body.appendChild(arBtn);
 
             // Controller
@@ -121,6 +130,13 @@
             debugCtx.font = '30px monospace';
             debugCtx.fillText(text, 20, 70);
             if (debugMesh.material.map) debugMesh.material.map.needsUpdate = true;
+
+            // Sync to 2D ARIA status overlay
+            const statusEl = document.getElementById('ar-status');
+            if (statusEl) {
+                statusEl.textContent = text;
+                statusEl.style.display = 'block';
+            }
         }
 
         function onSelectStart(event) {
