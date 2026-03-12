@@ -6,9 +6,33 @@
     <title>Fusion 360 AR - Color</title>
     <style>
         body { margin: 0; background: #222; overflow: hidden; font-family: sans-serif; }
+        #overlay {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none;
+            z-index: 1000;
+        }
+        #toast {
+            position: absolute;
+            bottom: 80px; left: 50%;
+            transform: translateX(-50%);
+            pointer-events: auto;
+            background: rgba(10,10,10,0.8);
+            color: #00ff00;
+            font-family: monospace;
+            padding: 10px 20px;
+            border-radius: 5px;
+            opacity: 0;
+            transition: opacity 0.3s;
+            font-size: 16px;
+        }
+        #toast.visible { opacity: 1; }
     </style>
 </head>
 <body>
+    <div id="overlay">
+        <div id="toast" role="status" aria-live="polite"></div>
+    </div>
     <script type="importmap">
         {
             "imports": {
@@ -71,7 +95,11 @@
             renderer.xr.enabled = true;
             document.body.appendChild(renderer.domElement);
 
-            const arBtn = ARButton.createButton(renderer, { requiredFeatures: ['hit-test'] });
+            const arBtn = ARButton.createButton(renderer, {
+                requiredFeatures: ['hit-test'],
+                optionalFeatures: ['dom-overlay'],
+                domOverlay: { root: document.getElementById('overlay') }
+            });
             document.body.appendChild(arBtn);
 
             // Controller
@@ -112,15 +140,28 @@
             scene.add(debugMesh);
         }
 
+        let toastTimeout = null;
         function updateDebugText(text) {
-            if (!debugCtx) return;
-            debugCtx.clearRect(0, 0, 512, 128);
-            debugCtx.fillStyle = 'rgba(10,10,10,0.8)';
-            debugCtx.fillRect(0, 0, 512, 128);
-            debugCtx.fillStyle = '#00ff00';
-            debugCtx.font = '30px monospace';
-            debugCtx.fillText(text, 20, 70);
-            if (debugMesh.material.map) debugMesh.material.map.needsUpdate = true;
+            if (debugCtx) {
+                debugCtx.clearRect(0, 0, 512, 128);
+                debugCtx.fillStyle = 'rgba(10,10,10,0.8)';
+                debugCtx.fillRect(0, 0, 512, 128);
+                debugCtx.fillStyle = '#00ff00';
+                debugCtx.font = '30px monospace';
+                debugCtx.fillText(text, 20, 70);
+                if (debugMesh.material.map) debugMesh.material.map.needsUpdate = true;
+            }
+
+            const toast = document.getElementById('toast');
+            if (toast) {
+                toast.textContent = text;
+                toast.classList.add('visible');
+
+                if (toastTimeout) clearTimeout(toastTimeout);
+                toastTimeout = setTimeout(() => {
+                    toast.classList.remove('visible');
+                }, 3000);
+            }
         }
 
         function onSelectStart(event) {
