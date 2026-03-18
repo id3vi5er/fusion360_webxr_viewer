@@ -1,0 +1,3 @@
+## 2024-05-15 - Accessible WebXR Status Updates
+**Learning:** 3D text meshes within WebXR scenes are entirely inaccessible to screen readers, leaving visually impaired users unaware of application state changes (like "Grab: 1 Hand" or "Scale: 2 Hands").
+**Action:** Always implement a 2D HTML `dom-overlay` with a container featuring `role="status"` and `aria-live="polite"` to duplicate critical visual status updates for screen readers. Ensure the overlay root uses `pointer-events: none` while interactive/visible children use `pointer-events: auto` to prevent blocking the WebXR canvas.
