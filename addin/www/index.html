@@ -6,9 +6,32 @@
     <title>Fusion 360 AR - Color</title>
     <style>
         body { margin: 0; background: #222; overflow: hidden; font-family: sans-serif; }
+        #ar-overlay {
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            pointer-events: none;
+            display: flex;
+            justify-content: center;
+            align-items: flex-end;
+            padding-bottom: 80px;
+        }
+        #ar-toast {
+            background: rgba(10, 10, 10, 0.8);
+            color: #00ff00;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-family: monospace;
+            font-size: 16px;
+            pointer-events: auto;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
     </style>
 </head>
 <body>
+    <div id="ar-overlay">
+        <div id="ar-toast" role="status" aria-live="polite"></div>
+    </div>
     <script type="importmap">
         {
             "imports": {
@@ -71,7 +94,11 @@
             renderer.xr.enabled = true;
             document.body.appendChild(renderer.domElement);
 
-            const arBtn = ARButton.createButton(renderer, { requiredFeatures: ['hit-test'] });
+            const arBtn = ARButton.createButton(renderer, {
+                requiredFeatures: ['hit-test'],
+                optionalFeatures: ['dom-overlay'],
+                domOverlay: { root: document.getElementById('ar-overlay') }
+            });
             document.body.appendChild(arBtn);
 
             // Controller
@@ -113,6 +140,19 @@
         }
 
         function updateDebugText(text) {
+            // Update 2D Toast (Accessible)
+            const toast = document.getElementById('ar-toast');
+            if (toast) {
+                toast.textContent = text;
+                toast.style.opacity = '1';
+
+                if (toast.hideTimeout) clearTimeout(toast.hideTimeout);
+                toast.hideTimeout = setTimeout(() => {
+                    toast.style.opacity = '0';
+                }, 3000);
+            }
+
+            // Update 3D Debug Text
             if (!debugCtx) return;
             debugCtx.clearRect(0, 0, 512, 128);
             debugCtx.fillStyle = 'rgba(10,10,10,0.8)';
