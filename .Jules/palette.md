@@ -1,0 +1,3 @@
+## 2024-03-20 - WebXR DOM Overlay for Screen Reader Accessibility
+**Learning:** In Three.js WebXR applications, 3D text meshes are completely inaccessible to screen readers. Relying solely on a canvas rendering for status or interaction feedback leaves visually impaired users without context in AR/VR.
+**Action:** Use WebXR `dom-overlay` capabilities and pair any 3D status indicators with a visually hidden or subtly overlaid 2D DOM element using standard HTML landmarks (like `role="status"` and `aria-live="polite"`). Ensure the overlay container uses `pointer-events: none` to let spatial interactions pass through to the 3D scene.
