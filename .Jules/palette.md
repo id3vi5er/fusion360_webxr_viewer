@@ -1,0 +1,3 @@
+## 2024-03-21 - Accessible 2D Toast over WebXR Canvas
+**Learning:** 3D text meshes in WebXR are completely invisible to screen readers, creating an accessibility barrier for status updates (like loading models, tracking controller events, or scale resets). Relying solely on canvas renders violates WCAG guidelines for status messaging.
+**Action:** Always implement a `dom-overlay` with a 2D HTML element containing `role="status"` and `aria-live="polite"` inside the overlay root when providing ephemeral system feedback in a WebXR application. Ensure the container has `pointer-events: none` so clicks pass through to the 3D scene, while the toast explicitly sets `pointer-events: auto` to allow interaction if needed.
