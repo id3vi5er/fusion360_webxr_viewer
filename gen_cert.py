@@ -33,15 +33,12 @@ def generate_certs():
     # Issue certificate for localhost and the local IP
     server_cert = ca.issue_cert("localhost", "127.0.0.1", ip)
 
-    print(f"Writing certificates to:
-  - {cert_path}
-  - {key_path}")
+    print(f"Writing certificates to:\n  - {cert_path}\n  - {key_path}")
     
     server_cert.cert_chain_pems[0].write_to_path(cert_path)
     server_cert.private_key_pem.write_to_path(key_path)
 
-    print("
-Done! Certificates updated.")
+    print("\nDone! Certificates updated.")
     print("Restart Fusion 360 Add-in to apply changes.")
 
 if __name__ == "__main__":
