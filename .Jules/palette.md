@@ -1,0 +1,3 @@
+## 2024-05-24 - Accessible 2D Toast Notifications in WebXR
+**Learning:** In Three.js WebXR applications, 3D text meshes (like the debug plane) are not accessible to screen readers. For accessible status updates, it is necessary to implement a 2D HTML element with appropriate ARIA attributes (`role="status"`, `aria-live="polite"`) inside a `dom-overlay` configured via the `ARButton`'s `optionalFeatures`.
+**Action:** When providing status updates in WebXR contexts, always configure the AR session with `dom-overlay` and map the 3D text content to an accessible 2D DOM element overlaid on the screen.
