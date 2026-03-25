@@ -6,9 +6,44 @@
     <title>Fusion 360 AR - Color</title>
     <style>
         body { margin: 0; background: #222; overflow: hidden; font-family: sans-serif; }
+
+        #overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            display: flex;
+            justify-content: center;
+            align-items: flex-end;
+            z-index: 100;
+        }
+
+        #toast {
+            background: rgba(0, 0, 0, 0.8);
+            color: #fff;
+            padding: 12px 24px;
+            border-radius: 20px;
+            font-size: 16px;
+            margin-bottom: 80px;
+            pointer-events: auto;
+            opacity: 0;
+            transition: opacity 0.3s ease-in-out;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+        }
+
+        #toast.visible {
+            opacity: 1;
+        }
     </style>
 </head>
 <body>
+    <div id="overlay">
+        <div id="toast" role="status" aria-live="polite"></div>
+    </div>
+
     <script type="importmap">
         {
             "imports": {
@@ -71,7 +106,11 @@
             renderer.xr.enabled = true;
             document.body.appendChild(renderer.domElement);
 
-            const arBtn = ARButton.createButton(renderer, { requiredFeatures: ['hit-test'] });
+            const arBtn = ARButton.createButton(renderer, {
+                requiredFeatures: ['hit-test'],
+                optionalFeatures: ['dom-overlay'],
+                domOverlay: { root: document.getElementById('overlay') }
+            });
             document.body.appendChild(arBtn);
 
             // Controller
@@ -112,6 +151,7 @@
             scene.add(debugMesh);
         }
 
+        let toastTimeout;
         function updateDebugText(text) {
             if (!debugCtx) return;
             debugCtx.clearRect(0, 0, 512, 128);
@@ -121,6 +161,16 @@
             debugCtx.font = '30px monospace';
             debugCtx.fillText(text, 20, 70);
             if (debugMesh.material.map) debugMesh.material.map.needsUpdate = true;
+
+            const toast = document.getElementById('toast');
+            if (toast) {
+                toast.textContent = text;
+                toast.classList.add('visible');
+                clearTimeout(toastTimeout);
+                toastTimeout = setTimeout(() => {
+                    toast.classList.remove('visible');
+                }, 3000);
+            }
         }
 
         function onSelectStart(event) {
