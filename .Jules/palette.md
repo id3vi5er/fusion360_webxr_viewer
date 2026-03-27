@@ -1,0 +1,3 @@
+## 2024-05-24 - WebXR Accessibility with DOM Overlays
+**Learning:** 3D text meshes in Three.js/WebXR are completely inaccessible to screen readers. Users who rely on assistive technology get no feedback on application state changes.
+**Action:** Always implement a parallel 2D HTML `dom-overlay` with ARIA live regions (`role="status"`, `aria-live="polite"`) to provide accessible status updates that correspond to in-world 3D visual feedback.
