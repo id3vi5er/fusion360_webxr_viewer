@@ -9,6 +9,9 @@
     </style>
 </head>
 <body>
+    <div id="overlay" style="pointer-events: none; position: absolute; inset: 0; z-index: 10;">
+        <div id="toast" role="status" aria-live="polite" style="pointer-events: auto; position: absolute; bottom: 80px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.8); color: white; padding: 10px 20px; border-radius: 20px; opacity: 0; transition: opacity 0.3s; font-family: sans-serif; text-align: center;"></div>
+    </div>
     <script type="importmap">
         {
             "imports": {
@@ -71,7 +74,11 @@
             renderer.xr.enabled = true;
             document.body.appendChild(renderer.domElement);
 
-            const arBtn = ARButton.createButton(renderer, { requiredFeatures: ['hit-test'] });
+            const arBtn = ARButton.createButton(renderer, {
+                requiredFeatures: ['hit-test'],
+                optionalFeatures: ['dom-overlay'],
+                domOverlay: { root: document.getElementById('overlay') }
+            });
             document.body.appendChild(arBtn);
 
             // Controller
@@ -112,6 +119,7 @@
             scene.add(debugMesh);
         }
 
+        let toastTimeout;
         function updateDebugText(text) {
             if (!debugCtx) return;
             debugCtx.clearRect(0, 0, 512, 128);
@@ -121,6 +129,17 @@
             debugCtx.font = '30px monospace';
             debugCtx.fillText(text, 20, 70);
             if (debugMesh.material.map) debugMesh.material.map.needsUpdate = true;
+
+            // Update 2D DOM Overlay
+            const toast = document.getElementById('toast');
+            if (toast) {
+                toast.textContent = text;
+                toast.style.opacity = '1';
+                if (toastTimeout) clearTimeout(toastTimeout);
+                toastTimeout = setTimeout(() => {
+                    toast.style.opacity = '0';
+                }, 3000);
+            }
         }
 
         function onSelectStart(event) {
