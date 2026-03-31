@@ -6,9 +6,53 @@
     <title>Fusion 360 AR - Color</title>
     <style>
         body { margin: 0; background: #222; overflow: hidden; font-family: sans-serif; }
+
+        #overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 10;
+        }
+
+        #toast-container {
+            position: absolute;
+            bottom: 80px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            pointer-events: none;
+        }
+
+        .toast {
+            background-color: rgba(10, 10, 10, 0.8);
+            color: #00ff00;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-size: 16px;
+            font-family: monospace;
+            margin-top: 10px;
+            opacity: 0;
+            transition: opacity 0.3s ease-in-out;
+            pointer-events: auto;
+        }
+
+        .toast.visible {
+            opacity: 1;
+        }
     </style>
 </head>
 <body>
+    <div id="overlay">
+        <div id="toast-container" role="status" aria-live="polite">
+            <div id="toast" class="toast"></div>
+        </div>
+    </div>
+
     <script type="importmap">
         {
             "imports": {
@@ -38,8 +82,8 @@
         let currentScale = 0.01;
         const DEFAULT_SCALE = 0.01;
         
-        // Debug Panel
-        let debugMesh, debugCtx, debugCanvas;
+        // Toast Timer
+        let toastTimeout;
         
         init();
         animate();
@@ -60,8 +104,6 @@
             modelGroup = new THREE.Group();
             modelGroup.position.set(0, 0, -1); 
             scene.add(modelGroup);
-            
-            createDebugPanel();
 
             renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
             renderer.setPixelRatio(window.devicePixelRatio);
@@ -71,7 +113,11 @@
             renderer.xr.enabled = true;
             document.body.appendChild(renderer.domElement);
 
-            const arBtn = ARButton.createButton(renderer, { requiredFeatures: ['hit-test'] });
+            const arBtn = ARButton.createButton(renderer, {
+                requiredFeatures: ['hit-test'],
+                optionalFeatures: ['dom-overlay'],
+                domOverlay: { root: document.getElementById('overlay') }
+            });
             document.body.appendChild(arBtn);
 
             // Controller
@@ -99,28 +145,17 @@
             window.addEventListener('resize', onWindowResize);
         }
 
-        function createDebugPanel() {
-            debugCanvas = document.createElement('canvas');
-            debugCanvas.width = 512;
-            debugCanvas.height = 128;
-            debugCtx = debugCanvas.getContext('2d');
-            const tex = new THREE.CanvasTexture(debugCanvas);
-            const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0.9, depthTest: false });
-            const geo = new THREE.PlaneGeometry(0.3, 0.075);
-            debugMesh = new THREE.Mesh(geo, mat);
-            debugMesh.renderOrder = 999; 
-            scene.add(debugMesh);
-        }
-
         function updateDebugText(text) {
-            if (!debugCtx) return;
-            debugCtx.clearRect(0, 0, 512, 128);
-            debugCtx.fillStyle = 'rgba(10,10,10,0.8)';
-            debugCtx.fillRect(0, 0, 512, 128);
-            debugCtx.fillStyle = '#00ff00';
-            debugCtx.font = '30px monospace';
-            debugCtx.fillText(text, 20, 70);
-            if (debugMesh.material.map) debugMesh.material.map.needsUpdate = true;
+            const toast = document.getElementById('toast');
+            if (toast) {
+                toast.textContent = text;
+                toast.classList.add('visible');
+
+                if (toastTimeout) clearTimeout(toastTimeout);
+                toastTimeout = setTimeout(() => {
+                    toast.classList.remove('visible');
+                }, 3000);
+            }
         }
 
         function onSelectStart(event) {
@@ -260,13 +295,6 @@
 
         function animate() {
             renderer.setAnimationLoop(() => {
-                if (debugMesh && camera) {
-                    const offset = new THREE.Vector3(-0.15, 0.1, -0.5); 
-                    offset.applyQuaternion(camera.quaternion);
-                    debugMesh.position.copy(camera.position).add(offset);
-                    debugMesh.quaternion.copy(camera.quaternion);
-                }
-
                 if (renderer.xr.isPresenting && !hasSpawned) {
                     const camPos = new THREE.Vector3().setFromMatrixPosition(camera.matrixWorld);
                     if (camPos.y > 0.0 || performance.now() > 3000) { 

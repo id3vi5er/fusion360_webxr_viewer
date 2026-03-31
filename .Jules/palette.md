@@ -1,0 +1,3 @@
+## 2024-03-31 - WebXR Accessible Status Toasts
+**Learning:** 3D text meshes in Three.js/WebXR are completely invisible to screen readers, making critical status updates inaccessible to visually impaired users.
+**Action:** When adding status feedback to WebXR environments, always implement a 2D HTML element with `role="status"` and `aria-live="polite"` inside a `dom-overlay` configured via `ARButton`'s `optionalFeatures`, ensuring `pointer-events: none` on the overlay root to maintain canvas interactability.
