@@ -6,9 +6,33 @@
     <title>Fusion 360 AR - Color</title>
     <style>
         body { margin: 0; background: #222; overflow: hidden; font-family: sans-serif; }
+        #ui-overlay {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none; /* Let clicks pass to the canvas unless explicitly handled by children */
+            display: flex;
+            justify-content: center;
+            align-items: flex-end;
+            padding-bottom: 80px; /* Above the AR Button */
+            z-index: 10;
+        }
+        #toast {
+            background: rgba(10, 10, 10, 0.9);
+            color: #00ff00;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-family: monospace;
+            font-size: 16px;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+            pointer-events: auto; /* So it could be interacted with if needed */
+        }
     </style>
 </head>
 <body>
+    <div id="ui-overlay">
+        <div id="toast" role="status" aria-live="polite"></div>
+    </div>
     <script type="importmap">
         {
             "imports": {
@@ -71,7 +95,11 @@
             renderer.xr.enabled = true;
             document.body.appendChild(renderer.domElement);
 
-            const arBtn = ARButton.createButton(renderer, { requiredFeatures: ['hit-test'] });
+            const arBtn = ARButton.createButton(renderer, {
+                requiredFeatures: ['hit-test'],
+                optionalFeatures: ['dom-overlay'],
+                domOverlay: { root: document.getElementById('ui-overlay') }
+            });
             document.body.appendChild(arBtn);
 
             // Controller
@@ -112,6 +140,7 @@
             scene.add(debugMesh);
         }
 
+        let toastTimeout = null;
         function updateDebugText(text) {
             if (!debugCtx) return;
             debugCtx.clearRect(0, 0, 512, 128);
@@ -121,6 +150,16 @@
             debugCtx.font = '30px monospace';
             debugCtx.fillText(text, 20, 70);
             if (debugMesh.material.map) debugMesh.material.map.needsUpdate = true;
+
+            const toast = document.getElementById('toast');
+            if (toast) {
+                toast.textContent = text;
+                toast.style.opacity = '1';
+                if (toastTimeout) clearTimeout(toastTimeout);
+                toastTimeout = setTimeout(() => {
+                    toast.style.opacity = '0';
+                }, 3000);
+            }
         }
 
         function onSelectStart(event) {
