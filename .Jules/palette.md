@@ -1,0 +1,3 @@
+## 2024-05-18 - WebXR Accessible DOM Overlay
+**Learning:** 3D text meshes in WebXR are not accessible to screen readers. For accessible status updates (e.g., toasts, messages), a 2D HTML element with appropriate ARIA attributes must be implemented within a `dom-overlay` configured via the `ARButton`'s `optionalFeatures`.
+**Action:** When working on WebXR UI enhancements, always check if text content or status updates are rendered solely in 3D. If so, configure a `dom-overlay` root element with `role="status"` and `aria-live="polite"` elements inside it. Use `pointer-events: none` instead of `display: none` to keep the overlay hidden while maintaining structure.
