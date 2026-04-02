@@ -18,6 +18,10 @@
         }
     </script>
 
+    <div id="overlay-root" style="pointer-events: none; position: absolute; inset: 0; z-index: 9999;">
+        <div id="toast" role="status" aria-live="polite" style="position: absolute; bottom: 80px; left: 50%; transform: translateX(-50%); background: rgba(10, 10, 10, 0.8); color: #00ff00; padding: 10px 20px; border-radius: 8px; font-family: monospace; font-size: 20px; opacity: 0; transition: opacity 0.3s; pointer-events: none;"></div>
+    </div>
+
     <script type="module">
         import * as THREE from 'three';
         import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
@@ -71,7 +75,11 @@
             renderer.xr.enabled = true;
             document.body.appendChild(renderer.domElement);
 
-            const arBtn = ARButton.createButton(renderer, { requiredFeatures: ['hit-test'] });
+            const arBtn = ARButton.createButton(renderer, {
+                requiredFeatures: ['hit-test'],
+                optionalFeatures: ['dom-overlay'],
+                domOverlay: { root: document.getElementById('overlay-root') }
+            });
             document.body.appendChild(arBtn);
 
             // Controller
@@ -112,6 +120,7 @@
             scene.add(debugMesh);
         }
 
+        let toastTimeout;
         function updateDebugText(text) {
             if (!debugCtx) return;
             debugCtx.clearRect(0, 0, 512, 128);
@@ -121,6 +130,16 @@
             debugCtx.font = '30px monospace';
             debugCtx.fillText(text, 20, 70);
             if (debugMesh.material.map) debugMesh.material.map.needsUpdate = true;
+
+            const toast = document.getElementById('toast');
+            if (toast) {
+                toast.textContent = text;
+                toast.style.opacity = '1';
+                clearTimeout(toastTimeout);
+                toastTimeout = setTimeout(() => {
+                    toast.style.opacity = '0';
+                }, 3000);
+            }
         }
 
         function onSelectStart(event) {
