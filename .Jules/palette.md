@@ -1,0 +1,3 @@
+## 2024-04-03 - WebXR Screen Reader Accessibility
+**Learning:** In Three.js WebXR applications, 3D text meshes are not accessible to screen readers. For accessible status updates during an AR session, it is required to use a 2D HTML element with appropriate ARIA attributes (e.g. `role="status"` and `aria-live="polite"`) implemented via a `dom-overlay` configured inside the `ARButton`'s `optionalFeatures`.
+**Action:** Always implement a 2D DOM overlay for crucial state changes or status messages in WebXR to ensure visually impaired users using screen readers can receive updates. Ensure the overlay root has `pointer-events: none` so it does not block interactions unless explicitly needed.
