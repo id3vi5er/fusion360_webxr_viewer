@@ -9,6 +9,9 @@
     </style>
 </head>
 <body>
+    <div id="ar-overlay" style="pointer-events: none; position: absolute; bottom: 80px; width: 100%; text-align: center; z-index: 1000; opacity: 0; transition: opacity 0.3s;">
+        <div id="status-text" aria-live="polite" role="status" style="background: rgba(0,0,0,0.7); color: white; padding: 10px; border-radius: 5px; display: inline-block;">Ready</div>
+    </div>
     <script type="importmap">
         {
             "imports": {
@@ -71,7 +74,11 @@
             renderer.xr.enabled = true;
             document.body.appendChild(renderer.domElement);
 
-            const arBtn = ARButton.createButton(renderer, { requiredFeatures: ['hit-test'] });
+            const arBtn = ARButton.createButton(renderer, {
+                requiredFeatures: ['hit-test'],
+                optionalFeatures: ['dom-overlay'],
+                domOverlay: { root: document.getElementById('ar-overlay') }
+            });
             document.body.appendChild(arBtn);
 
             // Controller
@@ -121,6 +128,17 @@
             debugCtx.font = '30px monospace';
             debugCtx.fillText(text, 20, 70);
             if (debugMesh.material.map) debugMesh.material.map.needsUpdate = true;
+
+            const statusText = document.getElementById('status-text');
+            if (statusText) {
+                statusText.textContent = text;
+            }
+            const arOverlay = document.getElementById('ar-overlay');
+            if (arOverlay && renderer && renderer.xr && renderer.xr.isPresenting) {
+                arOverlay.style.opacity = '1';
+            } else if (arOverlay) {
+                arOverlay.style.opacity = '0';
+            }
         }
 
         function onSelectStart(event) {
