@@ -1,0 +1,3 @@
+## 2025-04-07 - WebXR Status Updates Accessibility
+**Learning:** In Three.js WebXR applications, 3D text meshes are inherently inaccessible to screen readers because they bypass the DOM. Standard visual debugging or status text rendered in a 3D canvas leaves visually impaired users without feedback on state changes (e.g., loading progress, interaction updates).
+**Action:** Always implement a complementary 2D HTML element with appropriate ARIA attributes (like `aria-live="polite"`) within a `dom-overlay`. This ensures critical application state updates are announced by assistive technologies while visually represented in the 3D scene. Ensure the DOM overlay has `pointer-events: none` on its container so it doesn't block interactions before entering AR mode.
