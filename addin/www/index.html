@@ -6,9 +6,32 @@
     <title>Fusion 360 AR - Color</title>
     <style>
         body { margin: 0; background: #222; overflow: hidden; font-family: sans-serif; }
+        #ar-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 1000;
+        }
+        .sr-only {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            padding: 0;
+            margin: -1px;
+            overflow: hidden;
+            clip: rect(0, 0, 0, 0);
+            white-space: nowrap;
+            border: 0;
+        }
     </style>
 </head>
 <body>
+    <div id="ar-overlay">
+        <div id="a11y-status" class="sr-only" aria-live="polite"></div>
+    </div>
     <script type="importmap">
         {
             "imports": {
@@ -71,7 +94,11 @@
             renderer.xr.enabled = true;
             document.body.appendChild(renderer.domElement);
 
-            const arBtn = ARButton.createButton(renderer, { requiredFeatures: ['hit-test'] });
+            const arBtn = ARButton.createButton(renderer, {
+                requiredFeatures: ['hit-test'],
+                optionalFeatures: ['dom-overlay'],
+                domOverlay: { root: document.getElementById('ar-overlay') }
+            });
             document.body.appendChild(arBtn);
 
             // Controller
@@ -121,6 +148,12 @@
             debugCtx.font = '30px monospace';
             debugCtx.fillText(text, 20, 70);
             if (debugMesh.material.map) debugMesh.material.map.needsUpdate = true;
+
+            // Update aria-live region for accessibility
+            const a11yStatus = document.getElementById('a11y-status');
+            if (a11yStatus) {
+                a11yStatus.textContent = text;
+            }
         }
 
         function onSelectStart(event) {
