@@ -1,0 +1,3 @@
+## 2026-04-18 - WebXR Screen Reader Status
+**Learning:** 3D text meshes rendered in a WebXR canvas are inherently completely hidden from screen readers. To provide accessible status announcements within an immersive environment, you must leverage a `dom-overlay`.
+**Action:** Always pair WebXR visual text with a visually-hidden (e.g., using `.sr-only`), `aria-live="polite"` element located within the configured `domOverlay` root. Synchronize the 2D text with the 3D text updates.
