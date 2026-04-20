@@ -1,0 +1,3 @@
+## 2024-05-15 - Making WebXR 3D text accessible
+**Learning:** 3D text objects inside WebXR canvas renderers (like Three.js) are completely inaccessible to screen readers because they aren't in the DOM. However, standard WebXR allows embedding 2D HTML elements using the `dom-overlay` feature.
+**Action:** Always enable `dom-overlay` (via `optionalFeatures: ['dom-overlay']`) and define a root element when using `ARButton`. Inside this root element, add a hidden container (using standard `.sr-only` utility classes to visually hide without destroying accessibility) with `aria-live="polite"`. Sync any status/text updates sent to the 3D text meshes over to this ARIA live region's textContent. This keeps the visual AR intact while providing audio updates to screen reader users.
