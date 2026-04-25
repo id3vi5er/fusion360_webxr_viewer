@@ -6,6 +6,7 @@
     <title>Fusion 360 AR - Color</title>
     <style>
         body { margin: 0; background: #222; overflow: hidden; font-family: sans-serif; }
+        .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border-width: 0; }
     </style>
 </head>
 <body>
@@ -28,6 +29,7 @@
         let controller1, controller2;
         let lastModified = null;
         let hasSpawned = false;
+        let liveRegion;
         
         // State
         const activeControllers = new Set();
@@ -71,7 +73,18 @@
             renderer.xr.enabled = true;
             document.body.appendChild(renderer.domElement);
 
-            const arBtn = ARButton.createButton(renderer, { requiredFeatures: ['hit-test'] });
+            const overlay = document.createElement('div');
+            document.body.appendChild(overlay);
+            liveRegion = document.createElement('div');
+            liveRegion.className = 'sr-only';
+            liveRegion.setAttribute('aria-live', 'polite');
+            overlay.appendChild(liveRegion);
+
+            const arBtn = ARButton.createButton(renderer, {
+                requiredFeatures: ['hit-test'],
+                optionalFeatures: ['dom-overlay'],
+                domOverlay: { root: overlay }
+            });
             document.body.appendChild(arBtn);
 
             // Controller
@@ -113,6 +126,7 @@
         }
 
         function updateDebugText(text) {
+            if (liveRegion) liveRegion.textContent = text;
             if (!debugCtx) return;
             debugCtx.clearRect(0, 0, 512, 128);
             debugCtx.fillStyle = 'rgba(10,10,10,0.8)';
