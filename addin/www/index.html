@@ -6,6 +6,7 @@
     <title>Fusion 360 AR - Color</title>
     <style>
         body { margin: 0; background: #222; overflow: hidden; font-family: sans-serif; }
+        .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border-width: 0; }
     </style>
 </head>
 <body>
@@ -71,7 +72,20 @@
             renderer.xr.enabled = true;
             document.body.appendChild(renderer.domElement);
 
-            const arBtn = ARButton.createButton(renderer, { requiredFeatures: ['hit-test'] });
+            const overlayRoot = document.createElement('div');
+            overlayRoot.id = 'xr-overlay';
+            const liveRegion = document.createElement('div');
+            liveRegion.id = 'aria-live-region';
+            liveRegion.className = 'sr-only';
+            liveRegion.setAttribute('aria-live', 'polite');
+            overlayRoot.appendChild(liveRegion);
+            document.body.appendChild(overlayRoot);
+
+            const arBtn = ARButton.createButton(renderer, {
+                requiredFeatures: ['hit-test'],
+                optionalFeatures: ['dom-overlay'],
+                domOverlay: { root: overlayRoot }
+            });
             document.body.appendChild(arBtn);
 
             // Controller
@@ -121,6 +135,9 @@
             debugCtx.font = '30px monospace';
             debugCtx.fillText(text, 20, 70);
             if (debugMesh.material.map) debugMesh.material.map.needsUpdate = true;
+
+            const liveRegion = document.getElementById('aria-live-region');
+            if (liveRegion) liveRegion.textContent = text;
         }
 
         function onSelectStart(event) {
