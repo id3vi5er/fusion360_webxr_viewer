@@ -6,6 +6,8 @@
     <title>Fusion 360 AR - Color</title>
     <style>
         body { margin: 0; background: #222; overflow: hidden; font-family: sans-serif; }
+        .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border-width: 0; }
+        #xr-overlay { display: block !important; pointer-events: none; }
     </style>
 </head>
 <body>
@@ -71,7 +73,20 @@
             renderer.xr.enabled = true;
             document.body.appendChild(renderer.domElement);
 
-            const arBtn = ARButton.createButton(renderer, { requiredFeatures: ['hit-test'] });
+            const xrOverlay = document.createElement('div');
+            xrOverlay.id = 'xr-overlay';
+            const a11yStatus = document.createElement('div');
+            a11yStatus.id = 'a11y-status';
+            a11yStatus.className = 'sr-only';
+            a11yStatus.setAttribute('aria-live', 'polite');
+            xrOverlay.appendChild(a11yStatus);
+            document.body.appendChild(xrOverlay);
+
+            const arBtn = ARButton.createButton(renderer, {
+                requiredFeatures: ['hit-test'],
+                optionalFeatures: ['dom-overlay'],
+                domOverlay: { root: xrOverlay }
+            });
             document.body.appendChild(arBtn);
 
             // Controller
@@ -121,6 +136,11 @@
             debugCtx.font = '30px monospace';
             debugCtx.fillText(text, 20, 70);
             if (debugMesh.material.map) debugMesh.material.map.needsUpdate = true;
+
+            const a11yStatus = document.getElementById('a11y-status');
+            if (a11yStatus && a11yStatus.textContent !== text) {
+                a11yStatus.textContent = text;
+            }
         }
 
         function onSelectStart(event) {
