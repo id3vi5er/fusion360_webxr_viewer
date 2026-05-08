@@ -1,0 +1,3 @@
+## 2024-05-24 - Accessible 3D Text in WebXR
+**Learning:** 3D text meshes in WebXR are inherently inaccessible to screen readers, preventing visually impaired users from receiving important status updates.
+**Action:** Synchronize 3D text changes to a visually hidden 2D HTML element with `aria-live="polite"` inside a WebXR `dom-overlay` (with `pointer-events: none` on the root so it doesn't block interactions).
