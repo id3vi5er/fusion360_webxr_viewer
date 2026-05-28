@@ -1,0 +1,3 @@
+## 2024-05-24 - WebXR Status Announcements
+**Learning:** 3D text meshes in WebXR are inherently inaccessible to screen readers. To provide accessible status updates, synchronize 3D text changes to a 2D HTML element with ARIA attributes (`aria-live="polite"`) placed inside the WebXR `dom-overlay`.
+**Action:** Always include a DOM overlay with a visually hidden `aria-live` region (`.sr-only`) when building WebXR experiences that communicate state changes (like loading or interactions) to the user.
