@@ -1,0 +1,3 @@
+## 2024-06-01 - WebXR Accessibility with DOM Overlays
+**Learning:** 3D text meshes in WebXR are inherently inaccessible to screen readers. WebXR applications require DOM overlays to expose semantic HTML and ARIA attributes to assistive technologies.
+**Action:** Synchronize 3D text changes to a visually hidden 2D HTML element with ARIA attributes (e.g., `aria-live="polite"`) placed inside the WebXR `dom-overlay`.
