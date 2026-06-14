@@ -1,0 +1,3 @@
+## 2024-06-14 - WebXR 3D Text Accessibility
+**Learning:** 3D text rendered in WebXR canvases is completely invisible to screen readers. To make it accessible, WebXR applications must use a `dom-overlay` containing visually hidden (`.sr-only`) ARIA live regions that synchronize with the 3D text.
+**Action:** When building WebXR experiences with state text, always configure `ARButton` with `optionalFeatures: ['dom-overlay']` and bind text updates to an `aria-live` element within the overlay root, ensuring the overlay container has `pointer-events: none` to avoid blocking interactions.
