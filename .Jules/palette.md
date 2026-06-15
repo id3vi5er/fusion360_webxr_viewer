@@ -1,0 +1,3 @@
+## 2024-06-16 - Accessible 3D Text in WebXR
+**Learning:** 3D text rendered via Canvas/Three.js is entirely invisible to screen readers, making critical feedback in WebXR completely inaccessible. However, WebXR `dom-overlay` features allow regular HTML to be rendered over the XR view.
+**Action:** Always sync dynamic 3D status/debug text to a visually hidden (`.sr-only`) HTML element with `aria-live="polite"` inside a WebXR `dom-overlay` with `pointer-events: none`.
