@@ -1,0 +1,3 @@
+## 2024-05-24 - WebXR DOM Overlay Accessibility
+**Learning:** 3D text meshes in WebXR are completely hidden from screen readers. To make WebXR accessible, you can use the 'dom-overlay' feature in ARButton to display an HTML container over the 3D canvas, and place visually hidden (`.sr-only`) `aria-live` regions inside it. The overlay root must have `pointer-events: none` and MUST NOT have `display: none` (which removes ARIA from the a11y tree).
+**Action:** When creating WebXR experiences, always synchronize important 3D status changes (like "Grab: 1 Hand", "Lade Materialien...") to a hidden DOM overlay with `aria-live="polite"` so screen reader users get the same context as visual users.
