@@ -1,0 +1,3 @@
+## 2023-10-24 - WebXR Accessibility for 3D Text
+**Learning:** 3D text meshes or canvas textures in WebXR are inaccessible to screen readers, meaning critical AR status updates are lost for visually impaired users.
+**Action:** Synchronize 3D text updates to a visually hidden (`.sr-only`), `aria-live` HTML element placed inside a WebXR `dom-overlay`. Apply `pointer-events: none` to the overlay root so it doesn't block interactions.
