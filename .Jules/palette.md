@@ -1,0 +1,3 @@
+## 2024-10-27 - Syncing WebGL Text to DOM for Screen Readers
+**Learning:** 3D text rendered via Canvas/WebGL in WebXR is completely inaccessible to screen readers.
+**Action:** Implemented a DOM overlay containing a visually hidden (`.sr-only`) ARIA live region (`aria-live="polite"`) that synchronizes text state changes from the 3D scene, ensuring screen readers can announce state changes during WebXR sessions.
