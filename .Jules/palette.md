@@ -1,0 +1,3 @@
+## 2023-11-20 - [WebXR 3D Text Accessibility]
+**Learning:** 3D text in WebXR is completely inaccessible to screen readers because it's rendered on a canvas. We can make WebXR sessions accessible by using `dom-overlay` to synchronize 3D state changes to a visually hidden (`.sr-only`) ARIA live region inside a DOM overlay. The overlay must not have `display: none` and should have `pointer-events: none` to avoid blocking interactions.
+**Action:** Always enable `dom-overlay` when configuring `ARButton` for WebXR applications that need to provide text feedback, and sync text to a visually hidden `aria-live` region within it.
