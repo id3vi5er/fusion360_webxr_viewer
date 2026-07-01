@@ -1,0 +1,3 @@
+## 2024-05-24 - WebXR 3D Text Accessibility via DOM Overlay
+**Learning:** Text rendered within a 3D scene (like Three.js meshes or canvases) is invisible to screen readers, making status updates (like "Grab: 1 Hand") completely inaccessible.
+**Action:** Use a WebXR `dom-overlay` with a visually hidden (`.sr-only`) `aria-live="polite"` element to synchronize 3D text changes to the accessibility tree.
