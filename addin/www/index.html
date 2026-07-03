@@ -6,9 +6,26 @@
     <title>Fusion 360 AR - Color</title>
     <style>
         body { margin: 0; background: #222; overflow: hidden; font-family: sans-serif; }
+        .sr-only {
+            position: absolute;
+            width: 1px;
+            height: 1px;
+            padding: 0;
+            margin: -1px;
+            overflow: hidden;
+            clip: rect(0, 0, 0, 0);
+            white-space: nowrap;
+            border: 0;
+        }
+        #ar-overlay {
+            pointer-events: none;
+        }
     </style>
 </head>
 <body>
+    <div id="ar-overlay">
+        <div id="ar-announcer" class="sr-only" aria-live="polite"></div>
+    </div>
     <script type="importmap">
         {
             "imports": {
@@ -71,7 +88,11 @@
             renderer.xr.enabled = true;
             document.body.appendChild(renderer.domElement);
 
-            const arBtn = ARButton.createButton(renderer, { requiredFeatures: ['hit-test'] });
+            const arBtn = ARButton.createButton(renderer, {
+                requiredFeatures: ['hit-test'],
+                optionalFeatures: ['dom-overlay'],
+                domOverlay: { root: document.getElementById('ar-overlay') }
+            });
             document.body.appendChild(arBtn);
 
             // Controller
@@ -113,6 +134,9 @@
         }
 
         function updateDebugText(text) {
+            const announcer = document.getElementById('ar-announcer');
+            if (announcer) announcer.textContent = text;
+
             if (!debugCtx) return;
             debugCtx.clearRect(0, 0, 512, 128);
             debugCtx.fillStyle = 'rgba(10,10,10,0.8)';
