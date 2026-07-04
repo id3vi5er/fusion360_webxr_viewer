@@ -1,0 +1,3 @@
+## 2024-07-04 - WebXR Screen Reader Accessibility
+**Learning:** 3D text meshes in WebXR are completely inaccessible to screen readers. To make AR/VR accessible, state changes must be synchronized to a visually hidden (`.sr-only`) HTML element with an `aria-live` attribute placed inside a configured WebXR `dom-overlay`. The root element of the overlay must have `pointer-events: none;` to not block interaction.
+**Action:** Always include a DOM overlay with ARIA live regions when rendering critical status or instructional text in WebXR experiences.
