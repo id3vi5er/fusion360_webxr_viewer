@@ -30,6 +30,11 @@ ELEMENT_ARRAY_BUFFER = 34963
 # -----------------------------------------------------------------------------
 # Darstellung -> PBR-Material
 # -----------------------------------------------------------------------------
+def appearance_key(appearance):
+    # Kopien einer Bibliotheks-Darstellung behalten deren id – erst der Name ist im Design eindeutig
+    return (appearance.id, appearance.name) if appearance else ('__default__',)
+
+
 def _srgb_to_linear(c):
     c = c / 255.0
     return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
@@ -130,7 +135,7 @@ class GlbBuilder:
         return len(self.accessors) - 1
 
     def material(self, appearance):
-        key = appearance.id if appearance else '__default__'
+        key = appearance_key(appearance)
         if key not in self._material_index:
             self.materials.append(appearance_to_material(appearance))
             self._material_index[key] = len(self.materials) - 1
@@ -209,8 +214,7 @@ def _face_groups(body):
         except:
             pass
         ap = face.appearance
-        key = ap.id if ap else '__default__'
-        groups.setdefault(key, (ap, []))[1].append(face)
+        groups.setdefault(appearance_key(ap), (ap, []))[1].append(face)
     return list(groups.values()) if has_face_override else None
 
 

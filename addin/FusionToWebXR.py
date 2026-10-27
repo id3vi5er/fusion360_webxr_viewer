@@ -338,7 +338,7 @@ def design_fingerprint(design):
             if not body.isVisible:
                 continue
             bb = body.boundingBox
-            parts.append((body.entityToken, body.appearance.id if body.appearance else '',
+            parts.append((body.entityToken, glb_export.appearance_key(body.appearance),
                           round(body.volume, 7), round(body.area, 6), body.faces.count,
                           tuple(round(v, 5) for v in (bb.minPoint.x, bb.minPoint.y, bb.minPoint.z,
                                                       bb.maxPoint.x, bb.maxPoint.y, bb.maxPoint.z))))
