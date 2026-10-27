@@ -14,6 +14,14 @@ Aufwand: **S** = wenige Stunden, **M** = ein Abend bis Tag, **L** = mehrere Tage
   Offen: Endabnahme in der Quest. `documentSaved` wird bewusst nicht genutzt: Speichern ändert
   das Modell nicht, der Fingerabdruck würde den Export ohnehin verwerfen.
 
+- **Phase 3:** erledigt (2026-10-28), getestet im Desktop-Browser mit simulierten Controllern
+  (Zielen, Greifen, zwei Hände, Menü per Strahl). Offen: Endabnahme in der Quest, vor allem
+  Handtracking und der Menüknopf am Handgelenk.
+  Bewusst weggelassen: Hand- und Controllermodelle. Im Passthrough sieht man die echten Hände
+  und Controller ohnehin, und die Modelle von Three.js müssten aus dem Internet geladen werden.
+- **Nachtrag Farben (2026-10-28):** Kopierte Darstellungen tragen die `id` ihrer Vorlage;
+  Materialien werden deshalb nach `id` und Name unterschieden.
+
 Erkenntnisse aus der Umsetzung:
 - Proxy-Körper liefern ihr Netz bereits in Weltkoordinaten (cm). Der Exporter schreibt deshalb
   die Knoten ohne eigene Transformationen; die Hierarchie dient nur zur Gliederung.
@@ -26,6 +34,10 @@ Erkenntnisse aus der Umsetzung:
   Der Fingerabdruck (sichtbare Körper mit Darstellung, Volumen, Fläche, Flächenzahl, Hüllquader)
   erkennt auch reine Parameteränderungen.
 - SSE-Ereignisse dürfen nicht `error` heißen – den Namen nutzt EventSource für Verbindungsfehler.
+- Zwei-Hand-Drehung nur um die Hochachse, abgeleitet aus der Linie zwischen den Händen –
+  intuitiver als die Drehung eines einzelnen Controllers; die Neigung des Modells bleibt erhalten.
+- Die XR-Controller von Three.js haben `matrixAutoUpdate = false`; für Tests ohne Headset muss
+  das eingeschaltet werden, sonst wirkt eine gesetzte Position nicht auf den Strahl.
 - Beim Neuladen bleibt der Fusion-Ursprung fix; neu zentriert wird nur beim ersten Laden,
   bei Dokument- oder Formatwechsel und mit B/Y.
 

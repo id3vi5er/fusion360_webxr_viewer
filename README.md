@@ -83,16 +83,28 @@ WebXR requires a Secure Context (HTTPS). Since Fusion's internal Python environm
 *   **WebXR Server Stoppen** stops the server.
 
 ### 4. Controls (Quest 3)
+Controllers and hand tracking both work. In hand tracking mode a pinch acts like the trigger.
+
 | Input | Action |
 |---|---|
-| Trigger (one hand) | Grab, move and rotate the model |
-| Both triggers | Scale (the point between your hands stays fixed) |
+| Point at the model + trigger / pinch | Grab, move and rotate (the ray turns blue on a hit) |
+| Trigger / pinch close to the model | Grab without aiming (within 5 cm) |
+| Both hands | Scale and rotate around the vertical axis; the point between your hands stays fixed |
+| A / X | Open / close the menu |
 | B / Y | Reset: scale 1:1, re-center and place the model in front of you |
-| A / X | Show / hide the info panel |
+| Button above the left wrist (hand tracking) | Open / close the menu |
+
+The **menu** shows document, body count, triangles, scale and overall size, and offers:
+- **Scale presets** 1:1, 1:2, 1:5, 1:10 (free scaling with both hands still works)
+- **View**: normal, wireframe, x-ray
+- **Upright**: rotate only around the vertical axis while grabbing
+- **Reset** and **Close**
+
+Status messages (export running, model loaded, errors) appear briefly below your field of view; errors stay until the next message.
 
 ## 🛠️ Development
 
-*   **Frontend:** `addin/www/index.html` (Vanilla JS + Three.js 0.160, vendored). No build step required.
+*   **Frontend:** `addin/www/index.html` loads `app/main.js` (scene, loading, live sync, interaction) and `app/ui.js` (canvas-based VR menu, status toast, wrist button). Vanilla JS modules + Three.js 0.160 (vendored), no build step required. `window.__viewer` exposes internals for debugging in the browser console.
 *   **Backend:** Python `http.server` (threaded) wrapped in `ssl` (implemented in `FusionToWebXR.py`). `/events` streams `exporting`, `scene` and `exporterror` events. Auto-Export runs on Fusion's main thread via a custom event; the server thread never calls the Fusion API.
 *   **Export:** `addin/glb_export.py` – writes `model.glb` and `scene.json` (metadata: version, bodies, paths, entity tokens, bounding boxes). Files are written to a temp name first and then replaced atomically.
 *   **Desktop preview:** serve `addin/www` with any static server (e.g. `python -m http.server --directory addin/www`) – the page shows the model without a headset.
