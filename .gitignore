@@ -19,3 +19,8 @@ addin/www/*.mtl
 
 # Gemini CLI Context
 GEMINI.md
+addin/www/*.glb
+addin/www/scene.json
+addin/www/*.tmp
+addin/www/_export_tmp/
+addin/settings.json

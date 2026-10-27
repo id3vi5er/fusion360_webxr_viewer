@@ -4,8 +4,6 @@
   <img src="assets/icon.png" alt="Fusion 360 to WebXR Icon" width="128">
 
   <p>
-    <a href="https://github.com/id3vi5er/fusion360_webxr_viewer/actions"><img src="https://img.shields.io/badge/build-passing-brightgreen" alt="Build Status"></a>
-    <a href="https://github.com/id3vi5er/fusion360_webxr_viewer/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="License"></a>
     <a href="#"><img src="https://img.shields.io/badge/platform-Windows%20%7C%20Mac-lightgrey" alt="Platform"></a>
     <a href="#"><img src="https://img.shields.io/badge/fusion%20360-api-orange" alt="Fusion 360 API"></a>
   </p>
@@ -17,14 +15,17 @@
 
 ---
 
-This project is a **standalone Fusion 360 Add-in** that handles the entire pipeline: it exports the active design as an OBJ file and hosts a local HTTPS server directly within Fusion 360. No external Python servers or complex setups are required during daily use.
+This project is a **standalone Fusion 360 Add-in** that handles the entire pipeline: it exports the active design as a GLB file (glTF 2.0) and hosts a local HTTPS server directly within Fusion 360. No external Python servers, no internet connection and no complex setups are required during daily use.
+
+The GLB export is written by the add-in itself (no dependencies): every visible body is tessellated, the component tree is kept as glTF nodes, Fusion appearances become PBR materials and the model is exported in meters, so **1:1 scale is exact**. The classic Fusion OBJ export is still available as a fallback.
 
 ## 📂 Project Structure
 
 *   **`addin/`**: The complete Fusion 360 Add-in.
-    *   `FusionToWebXR.py`: Main logic (Export + Server + UI).
+    *   `FusionToWebXR.py`: Main logic (Server + UI commands + settings).
+    *   `glb_export.py`: Tessellation and GLB writer (pure Python).
     *   `FusionToWebXR.manifest`: Metadata.
-    *   `www/`: Web assets (HTML, JS) and exported models.
+    *   `www/`: Web app (`index.html`), local copy of Three.js (`vendor/`) and the exported model (`model.glb` + `scene.json`).
     *   `resources/`: Icons for the UI commands.
 *   **`gen_cert.py`**: Helper script to generate self-signed SSL certificates using `trustme` (requires external Python).
 *   **`requirements.txt`**: Python dependencies for the certificate generator.
@@ -75,11 +76,24 @@ WebXR requires a Secure Context (HTTPS). Since Fusion's internal Python environm
 
 ### 3. Export Model
 *   Open your design in Fusion 360.
-*   Click **WebXR Export** in the panel.
-*   The model in the headset will update automatically (the web app polls for changes).
+*   Click **WebXR Export** in the panel. Only visible bodies and components are exported (GLB).
+*   The model in the headset will update automatically (the web app checks `scene.json` every 2 s and keeps the current position and scale).
+*   **WebXR Einstellungen** selects the format (GLB / OBJ) and the tessellation quality.
+*   **WebXR Server Stoppen** stops the server.
+
+### 4. Controls (Quest 3)
+| Input | Action |
+|---|---|
+| Trigger (one hand) | Grab, move and rotate the model |
+| Both triggers | Scale (the point between your hands stays fixed) |
+| B / Y | Reset: scale 1:1 and place the model in front of you |
+| A / X | Show / hide the info panel |
 
 ## 🛠️ Development
 
-*   **Frontend:** `addin/www/index.html` (Vanilla JS + Three.js). No build step required.
-*   **Backend:** Python `http.server` wrapped in `ssl` (implemented in `FusionToWebXR.py`).
+*   **Frontend:** `addin/www/index.html` (Vanilla JS + Three.js 0.160, vendored). No build step required.
+*   **Backend:** Python `http.server` (threaded) wrapped in `ssl` (implemented in `FusionToWebXR.py`).
+*   **Export:** `addin/glb_export.py` – writes `model.glb` and `scene.json` (metadata: version, bodies, paths, entity tokens, bounding boxes). Files are written to a temp name first and then replaced atomically.
+*   **Desktop preview:** serve `addin/www` with any static server (e.g. `python -m http.server --directory addin/www`) – the page shows the model without a headset.
+*   **Roadmap:** see [`docs/ROADMAP.md`](docs/ROADMAP.md).
 *   **Icons:** `addin/resources/` (PNGs).
