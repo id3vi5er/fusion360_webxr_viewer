@@ -33,7 +33,7 @@
         // Gamepad-Belegung (xr-standard): 4 = A/X, 5 = B/Y
         const BTN_DEBUG = 4;
         const BTN_RESET = 5;
-        const POLL_MS = 2000;
+        const POLL_MS = 2000;           // nur als Rückfall, solange keine SSE-Verbindung steht
         const SPAWN_DISTANCE = 0.6;
         const SPAWN_WAIT_FRAMES = 30;   // Kopfposition stabilisiert sich erst nach einigen Frames
 
@@ -44,8 +44,10 @@
         let controller1, controller2;
 
         let sceneMeta = null;
+        let latestMeta = null;          // neuester bekannter Stand vom Server
         let loadedVersion = null;
         let loading = false;
+        let sseConnected = false;
         let modelRadius = 0.1;          // in Metern bei Maßstab 1
 
         let baseScale = 1;              // GLB: Meter -> 1, OBJ: cm -> 0.01
@@ -121,7 +123,8 @@
             // Zugriff für Debugging in der Browser-Konsole
             window.__viewer = { scene, camera, modelGroup, content, renderer };
             checkForUpdates();
-            setInterval(checkForUpdates, POLL_MS);
+            connectEvents();
+            setInterval(() => { if (!sseConnected) checkForUpdates(); }, POLL_MS);
             window.addEventListener('resize', onWindowResize);
         }
 
@@ -226,8 +229,22 @@
         // ---------------------------------------------------------------------
         // Laden
         // ---------------------------------------------------------------------
+        // Fusion meldet Exporte per Server-Sent Events; Polling nur, solange das nicht klappt
+        function connectEvents() {
+            if (!window.EventSource) return;
+            const es = new EventSource('./events');
+            es.onopen = () => { sseConnected = true; checkForUpdates(); };
+            es.onerror = () => { sseConnected = false; };
+            es.addEventListener('exporting', () => updateDebugText('Fusion exportiert...'));
+            es.addEventListener('scene', () => checkForUpdates());
+            // Eigener Name, weil 'error' bei EventSource für Verbindungsfehler reserviert ist
+            es.addEventListener('exporterror', e => {
+                updateDebugText(JSON.parse(e.data).message);
+                debugMesh.visible = true;
+            });
+        }
+
         async function checkForUpdates() {
-            if (loading) return;
             let meta;
             try {
                 const res = await fetch('./scene.json', { cache: 'no-store' });
@@ -240,23 +257,29 @@
                 updateDebugText("Server nicht erreichbar");
                 return;
             }
-            if (meta.version !== loadedVersion) loadModel(meta);
+            latestMeta = meta;
+            if (!loading) processQueue();
         }
 
-        async function loadModel(meta) {
+        // Lädt so lange nach, bis der neueste Stand angezeigt wird – Exporte während
+        // eines laufenden Ladevorgangs gehen so nicht verloren
+        async function processQueue() {
             loading = true;
-            updateDebugText(`Lade ${meta.format.toUpperCase()}...`);
-            try {
-                const obj = meta.format === 'glb' ? await loadGlb(meta) : await loadObj(meta);
-                setContent(obj, meta);
+            while (latestMeta && latestMeta.version !== loadedVersion) {
+                const meta = latestMeta;
+                updateDebugText(`Lade ${meta.format.toUpperCase()}...`);
+                try {
+                    const obj = meta.format === 'glb' ? await loadGlb(meta) : await loadObj(meta);
+                    setContent(obj, meta);
+                    updateDebugText("Modell geladen");
+                } catch (e) {
+                    console.error(e);
+                    updateDebugText(`Fehler beim Laden (${meta.format})`);
+                    debugMesh.visible = true;
+                }
                 loadedVersion = meta.version;
-                updateDebugText("Modell geladen");
-            } catch (e) {
-                console.error(e);
-                updateDebugText(`Fehler beim Laden (${meta.format})`);
-            } finally {
-                loading = false;
             }
+            loading = false;
         }
 
         function loadGlb(meta) {
@@ -302,17 +325,20 @@
 
         function setContent(obj, meta) {
             const firstLoad = !sceneMeta;
+            // Nur beim ersten Laden, nach Dokumentwechsel oder Formatwechsel neu zentrieren.
+            // Sonst bleibt der Fusion-Ursprung stehen und vorhandene Geometrie springt nicht,
+            // wenn etwas dazukommt.
+            const recenter = firstLoad || meta.document !== sceneMeta.document || meta.format !== sceneMeta.format;
             while (content.children.length) {
                 const old = content.children[0];
                 content.remove(old);
                 disposeObject(old);
             }
-            // Zentrieren im lokalen (unskalierten) Raum von modelGroup: Hüllquader
-            // berechnen, solange obj noch keinen Elternknoten hat
+            // Hüllquader im lokalen (unskalierten) Raum von modelGroup berechnen,
+            // solange obj noch keinen Elternknoten hat
             obj.updateMatrixWorld(true);
             const box = new THREE.Box3().setFromObject(obj);
-            const center = box.getCenter(new THREE.Vector3());
-            content.position.copy(center).negate();
+            if (recenter) content.position.copy(box.getCenter(new THREE.Vector3())).negate();
             content.add(obj);
 
             baseScale = meta.format === 'obj' ? 0.01 : 1;
@@ -339,7 +365,18 @@
             modelGroup.lookAt(camPos.x, modelGroup.position.y, camPos.z);
         }
 
+        function recenterContent() {
+            const obj = content.children[0];
+            if (!obj) return;
+            content.updateMatrixWorld(true);
+            const box = new THREE.Box3().setFromObject(obj);
+            // setFromObject rechnet in Weltkoordinaten – zurück in den lokalen Raum von content
+            box.applyMatrix4(content.matrixWorld.clone().invert());
+            content.position.copy(box.getCenter(new THREE.Vector3())).negate();
+        }
+
         function resetView() {
+            recenterContent();
             userScale = 1;
             applyScale();
             spawnInFront();

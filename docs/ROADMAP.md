@@ -10,7 +10,9 @@ Aufwand: **S** = wenige Stunden, **M** = ein Abend bis Tag, **L** = mehrere Tage
 - **Phase 1:** erledigt (2026-10-28), getestet an einer kleinen Baugruppe
   (verschachtelte Bauteile, Mehrfach-Instanz, ausgeblendete Körper, Glas und Metall).
   Offen: großes Modell (>500k Dreiecke) und Flächen mit eigener Darstellung.
-- **Vorgezogen aus Phase 2:** `ThreadingHTTPServer` ist schon drin (2.1 zur Hälfte).
+- **Phase 2:** erledigt (2026-10-28), getestet in Fusion mit einer Testinstanz und im Desktop-Browser.
+  Offen: Endabnahme in der Quest. `documentSaved` wird bewusst nicht genutzt: Speichern ändert
+  das Modell nicht, der Fingerabdruck würde den Export ohnehin verwerfen.
 
 Erkenntnisse aus der Umsetzung:
 - Proxy-Körper liefern ihr Netz bereits in Weltkoordinaten (cm). Der Exporter schreibt deshalb
@@ -19,6 +21,13 @@ Erkenntnisse aus der Umsetzung:
 - Der OBJ-Export von Fusion ignoriert die Sichtbarkeit und kommt Z-up an; GLB respektiert
   beides und dreht Z-up-Modelle nach Y-up.
 - Unter Windows muss der Server `SO_EXCLUSIVEADDRUSE` setzen, sonst wird ein belegter Port nicht erkannt.
+- Auto-Export: `commandTerminated` → Timer (1,5 s) → `fireCustomEvent` → Export im Hauptthread.
+  Läuft dabei gerade ein Befehl (`activeCommand` ≠ `SelectCommand`), wird neu geplant.
+  Der Fingerabdruck (sichtbare Körper mit Darstellung, Volumen, Fläche, Flächenzahl, Hüllquader)
+  erkennt auch reine Parameteränderungen.
+- SSE-Ereignisse dürfen nicht `error` heißen – den Namen nutzt EventSource für Verbindungsfehler.
+- Beim Neuladen bleibt der Fusion-Ursprung fix; neu zentriert wird nur beim ersten Laden,
+  bei Dokument- oder Formatwechsel und mit B/Y.
 
 ## Leitentscheidungen
 

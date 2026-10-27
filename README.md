@@ -76,9 +76,10 @@ WebXR requires a Secure Context (HTTPS). Since Fusion's internal Python environm
 
 ### 3. Export Model
 *   Open your design in Fusion 360.
-*   Click **WebXR Export** in the panel. Only visible bodies and components are exported (GLB).
-*   The model in the headset will update automatically (the web app checks `scene.json` every 2 s and keeps the current position and scale).
-*   **WebXR Einstellungen** selects the format (GLB / OBJ) and the tessellation quality.
+*   **Auto-Export (default):** while the server is running, every change in Fusion is exported automatically about 1.5 s after the last completed command. Only real model changes trigger an export (visible bodies, appearances, volume, area, bounding box are compared).
+*   **WebXR Export** exports manually at any time. Only visible bodies and components are exported (GLB).
+*   The headset is notified instantly via Server-Sent Events (`/events`) and reloads the model while keeping position and scale. The Fusion origin stays fixed, so added geometry does not shift the rest of the model. Without an event connection the web app falls back to polling `scene.json` every 2 s.
+*   **WebXR Einstellungen** selects the format (GLB / OBJ), the tessellation quality and turns Auto-Export on or off.
 *   **WebXR Server Stoppen** stops the server.
 
 ### 4. Controls (Quest 3)
@@ -86,13 +87,13 @@ WebXR requires a Secure Context (HTTPS). Since Fusion's internal Python environm
 |---|---|
 | Trigger (one hand) | Grab, move and rotate the model |
 | Both triggers | Scale (the point between your hands stays fixed) |
-| B / Y | Reset: scale 1:1 and place the model in front of you |
+| B / Y | Reset: scale 1:1, re-center and place the model in front of you |
 | A / X | Show / hide the info panel |
 
 ## 🛠️ Development
 
 *   **Frontend:** `addin/www/index.html` (Vanilla JS + Three.js 0.160, vendored). No build step required.
-*   **Backend:** Python `http.server` (threaded) wrapped in `ssl` (implemented in `FusionToWebXR.py`).
+*   **Backend:** Python `http.server` (threaded) wrapped in `ssl` (implemented in `FusionToWebXR.py`). `/events` streams `exporting`, `scene` and `exporterror` events. Auto-Export runs on Fusion's main thread via a custom event; the server thread never calls the Fusion API.
 *   **Export:** `addin/glb_export.py` – writes `model.glb` and `scene.json` (metadata: version, bodies, paths, entity tokens, bounding boxes). Files are written to a temp name first and then replaced atomically.
 *   **Desktop preview:** serve `addin/www` with any static server (e.g. `python -m http.server --directory addin/www`) – the page shows the model without a headset.
 *   **Roadmap:** see [`docs/ROADMAP.md`](docs/ROADMAP.md).
