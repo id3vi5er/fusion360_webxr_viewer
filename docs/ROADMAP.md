@@ -21,6 +21,13 @@ Aufwand: **S** = wenige Stunden, **M** = ein Abend bis Tag, **L** = mehrere Tage
   und Controller ohnehin, und die Modelle von Three.js müssten aus dem Internet geladen werden.
 - **Nachtrag Farben (2026-10-28):** Kopierte Darstellungen tragen die `id` ihrer Vorlage;
   Materialien werden deshalb nach `id` und Name unterschieden.
+- **Phase 4:** erledigt (2026-10-28). Im Desktop-Browser getestet: Bauteilliste (Ein/Aus, Nur,
+  Alle, Seiten), Explosionsansicht, Maße, Schnittebene, Messen (61,2 mm am B85, unverändert bei
+  Explosion). Nur in der Quest prüfbar: Platzieren per Hit-Test, Greifen der Schnittebene.
+- **Phase 5:** erledigt (2026-10-28) ohne 5.2 (Verdeckung durch Hände, auf Wunsch weggelassen).
+  Schatten im Desktop-Browser geprüft. Raumanker und Raumlicht nur in der Quest prüfbar;
+  beides fällt still zurück, wenn der Browser es nicht anbietet (Menü zeigt „Raumlicht“ nur,
+  wenn es aktiv ist).
 
 Erkenntnisse aus der Umsetzung:
 - Proxy-Körper liefern ihr Netz bereits in Weltkoordinaten (cm). Der Exporter schreibt deshalb
@@ -40,6 +47,21 @@ Erkenntnisse aus der Umsetzung:
   das eingeschaltet werden, sonst wirkt eine gesetzte Position nicht auf den Strahl.
 - Beim Neuladen bleibt der Fusion-Ursprung fix; neu zentriert wird nur beim ersten Laden,
   bei Dokument- oder Formatwechsel und mit B/Y.
+- Messpunkte hängen am getroffenen Körper (lokale Koordinaten) und werden nach einem Neuladen
+  über den Körperpfad neu zugeordnet; gemessen wird ohne Explosionsverschiebung.
+- `Raycaster.intersectObject` prüft keine Sichtbarkeit – ausgeblendete Körper müssen aus den
+  Treffern gefiltert werden.
+- Schnittebene: `clippingPlanes` plus `clipShadows`, sonst wirft das geschnittene Modell den
+  vollen Schatten. Rückseiten werden beim Schnitt eingeblendet statt einer echten Schnittkappe.
+- Platzieren unterscheidet die Fläche über die Normale des Hit-Tests: Boden/Tisch (y > 0,8),
+  Decke (y < −0,8), sonst Wand. Das Modell wird ausgerichtet und dann entlang der Normalen
+  verschoben, bis die nächste Ecke des modellfesten Hüllquaders die Fläche berührt – das
+  funktioniert auch an schrägen Wänden. An Wänden zeigt +Z (die Seite, die beim Start zum
+  Betrachter zeigt) in den Raum.
+- Raumanker werden nur innerhalb eines XR-Frames angelegt (`frame.createAnchor`); Anfragen aus
+  Ereignissen werden deshalb vorgemerkt und im nächsten Frame ausgeführt. Persistente Anker
+  (`requestPersistentHandle` / `restorePersistentAnchor`) werden je Dokumentname im
+  `localStorage` der Brille gemerkt, zusammen mit Maßstab und Flächenhöhe.
 
 ## Leitentscheidungen
 
@@ -133,10 +155,72 @@ Erkenntnisse aus der Umsetzung:
 
 | # | Aufgabe | Aufwand | braucht |
 |---|---|---|---|
-| 6.1 | Auswahl spiegeln Fusion → Brille (`activeSelectionChanged` → SSE, Highlight per Token) | M | 1.4, 2.1 |
-| 6.2 | Auswahl Brille → Fusion (POST → Custom Event → `ui.activeSelections`) | M | 6.1 |
-| 6.3 | Benutzerparameter als Regler in VR → Fusion rechnet neu → Auto-Export | M | 2.2, 3.1 |
+| 6.0 | Grundlage: Befehlskanal Brille → Fusion mit Sitzungsschlüssel | S | 2.1 |
+| 6.1 | Auswahl spiegeln Fusion → Brille | M | 6.0, 1.4 |
+| 6.2 | Auswahl Brille → Fusion | M | 6.0, 6.1 |
+| 6.3 | Benutzerparameter als Regler in VR → Fusion rechnet neu → Auto-Export | M | 6.0, 2.2, 3.1 |
 | 6.4 | Versionsvergleich: vorigen Export als halbtransparenten Geist einblenden | S | 1.5 |
+
+### Detailplanung Phase 6 (Stand 2026-10-28)
+
+**6.0 Befehlskanal.** Bisher spricht nur Fusion zur Brille (SSE). Für den Rückweg:
+- `POST /api/<befehl>` mit JSON-Körper, z. B. `/api/select`, `/api/param`.
+- Der Server-Thread legt den Befehl in eine `queue.Queue` und ruft
+  `fireCustomEvent('FusionToWebXR_Command')`. Der Handler im Hauptthread leert die Queue und
+  führt aus – derselbe Weg wie beim Auto-Export, der Server fasst die Fusion-API nie an.
+- Antwort sofort `202 Accepted`; das Ergebnis kommt per SSE (`selection`, `params`, `commanderror`).
+- **Sicherheit:** Bisher kann jedes Gerät im WLAN nur lesen. Mit Phase 6 kann es das Modell
+  ändern. Deshalb erzeugt das Add-in beim Serverstart einen zufälligen Schlüssel
+  (`secrets.token_urlsafe(8)`), der in der Start-URL steht (`https://ip:8000/?k=…`) und bei jedem
+  POST als Header `X-FXR-Key` mitkommen muss. Ohne Schlüssel: `403`. Die Brille merkt ihn sich
+  im `localStorage`. CORS für POST nur für den eigenen Ursprung.
+- Befehle mit Änderung am Modell landen als eigener Schritt in der Fusion-Rückgängig-Liste
+  (über einen versteckten Befehl, der in `execute` die Änderung macht) – so ist alles mit
+  Strg+Z umkehrbar.
+
+**Schlüssel für Körper.** `entityToken` ist laut Fusion-Doku nicht garantiert stabil und kann sich
+für dasselbe Objekt unterscheiden. Primärschlüssel ist deshalb der **Körperpfad**
+(`Wurzel/Säule:1/Kappe:1/Glaskappe`, steht schon in `scene.json` und in den glTF-`extras`).
+Auflösung in Fusion: Pfad → Occurrence über `allOccurrences` (`fullPathName`) → Körper per Name;
+der Token dient nur als schneller erster Versuch (`design.findEntityByToken`).
+
+**6.1 Auswahl Fusion → Brille.**
+- `ui.activeSelectionChanged` → ausgewählte Entitäten auf Körper abbilden: BRepBody direkt,
+  Fläche/Kante → `body`, Occurrence → alle Körper darunter.
+- Pfade per SSE `selection` senden (entprellt, ~100 ms).
+- Brille: Körper mit Umriss hervorheben (BoxHelper oder Kanten-Overlay in Akzentfarbe),
+  Name als Toast; bei Auswahl außerhalb des Blickfelds ein kleiner Richtungspfeil.
+
+**6.2 Auswahl Brille → Fusion.**
+- Neues Werkzeug „Auswählen“: Strahl auf Körper + Trigger → `POST /api/select {paths, mode}`
+  (`replace` oder mit zweitem Trigger `add`).
+- Fusion: `ui.activeSelections.clear()` + `add(body)`; der Browser-Baum klappt automatisch auf.
+- Echo vermeiden: Die eigene Auswahl löst `activeSelectionChanged` aus – mit einem Flag für
+  „kommt von der Brille“ wird das SSE-Echo unterdrückt bzw. nur bestätigt.
+- Nützlich zusammen mit der Bauteilliste: Zeile antippen = in Fusion auswählen.
+
+**6.3 Parameter in VR.**
+- Beim Export zusätzlich `params.json` schreiben: Benutzerparameter mit Name, Ausdruck,
+  Wert, Einheit, Kommentar; nur Parameter mit numerischem Wert (keine Formeln mit Bezügen
+  als Regler – die nur anzeigen).
+- Neue Menüseite „Parameter“: je Parameter ein Regler mit Bereich ±50 % um den Startwert
+  (oder aus dem Kommentar: `[min..max]`), Schrittweite nach Einheit (mm: 0,5).
+- Beim Loslassen des Reglers → `POST /api/param {name, value}`; Fusion setzt
+  `userParameters.itemByName(name).value` im Hauptthread → Neuberechnung → Auto-Export →
+  Brille lädt nach. Während des Ziehens nur lokal anzeigen, nicht senden (Neuberechnung kann
+  Sekunden dauern).
+- Fehler (z. B. Geometrie schlägt fehl) → Rückgängig und `commanderror` an die Brille.
+
+**6.4 Versionsvergleich.**
+- Exporter behält den vorigen Stand als `model_prev.glb` (Umbenennen vor dem Ersetzen).
+- Menü-Schalter „Vorversion“: lädt `model_prev.glb` zusätzlich in denselben `content`-Raum,
+  alle Materialien als halbtransparenter Geist (Blau, Deckkraft 0,2, `depthWrite: false`).
+- Optional später: Körper farbig nach Änderung (neu / entfernt / verändert) über Vergleich der
+  Körperliste und Hüllquader in `scene.json`.
+
+**Reihenfolge innerhalb von Phase 6:** 6.0 → 6.4 (klein, unabhängig) → 6.1 → 6.2 → 6.3.
+Testbar wie bisher über eine Testinstanz im Fusion-MCP und den Desktop-Browser; der
+Sitzungsschlüssel wird dort per URL mitgegeben.
 
 ## Reihenfolge
 

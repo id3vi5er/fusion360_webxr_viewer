@@ -94,17 +94,24 @@ Controllers and hand tracking both work. In hand tracking mode a pinch acts like
 | B / Y | Reset: scale 1:1, re-center and place the model in front of you |
 | Button above the left wrist (hand tracking) | Open / close the menu |
 
-The **menu** shows document, body count, triangles, scale and overall size, and offers:
-- **Scale presets** 1:1, 1:2, 1:5, 1:10 (free scaling with both hands still works)
-- **View**: normal, wireframe, x-ray
-- **Upright**: rotate only around the vertical axis while grabbing
-- **Reset** and **Close**
+The **menu** (three pages) shows document, body count, triangles, scale and overall size:
+- **View:** scale presets 1:1 / 1:2 / 1:5 / 1:10 (free scaling with both hands still works), normal / wireframe / x-ray, upright mode, shadows, dimensions (bounding box with edge lengths in mm), reset
+- **Tools:**
+  - *Grab* (default)
+  - *Place* – aim at a real surface and press. Floor and tables (green ring): the model stands on it. Walls (blue): the model's back touches the wall, front facing into the room. Ceilings (purple): the model hangs from it. The model always stays upright. Uses WebXR hit-test, falls back to the floor.
+  - *Measure* – tap two points on the model; snaps to corners and edge midpoints, shows the distance in mm (always measured on the non-exploded model)
+  - *Section* – a grabbable cutting plane; buttons for X / Y / Z orientation and flip
+  - *Explosion* slider – moves bodies outwards from the model center
+  - *Clear measurements*
+- **Bodies:** list of all bodies with on/off and "only this one", paging and "show all"; pointing at a row highlights the body
+
+**Room features (Quest 3):** the model is held in place with a WebXR anchor. Where the browser supports persistent anchors, the position (plus scale) is remembered per document and restored the next time AR starts. Shadows fall on the floor or on the surface the model was placed on. If the browser offers light estimation, the real room lighting is used (shown as "Raumlicht" in the menu).
 
 Status messages (export running, model loaded, errors) appear briefly below your field of view; errors stay until the next message.
 
 ## 🛠️ Development
 
-*   **Frontend:** `addin/www/index.html` loads `app/main.js` (scene, loading, live sync, interaction) and `app/ui.js` (canvas-based VR menu, status toast, wrist button). Vanilla JS modules + Three.js 0.160 (vendored), no build step required. `window.__viewer` exposes internals for debugging in the browser console.
+*   **Frontend:** `addin/www/index.html` loads `app/main.js` (scene, loading, live sync, interaction), `app/ui.js` (canvas-based VR menu, status toast, wrist button, labels), `app/tools.js` (explosion, dimensions, measuring, section plane) and `app/xr.js` (placement via hit-test, anchors, shadows, light estimation). Vanilla JS modules + Three.js 0.160 (vendored), no build step required. `window.__viewer` exposes internals for debugging in the browser console.
 *   **Backend:** Python `http.server` (threaded) wrapped in `ssl` (implemented in `FusionToWebXR.py`). `/events` streams `exporting`, `scene` and `exporterror` events. Auto-Export runs on Fusion's main thread via a custom event; the server thread never calls the Fusion API.
 *   **Export:** `addin/glb_export.py` – writes `model.glb` and `scene.json` (metadata: version, bodies, paths, entity tokens, bounding boxes). Files are written to a temp name first and then replaced atomically.
 *   **Desktop preview:** serve `addin/www` with any static server (e.g. `python -m http.server --directory addin/www`) – the page shows the model without a headset.

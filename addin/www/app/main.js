@@ -1,4 +1,4 @@
-// WebXR-Viewer für Fusion-Exporte: Laden, Live-Sync, Greifen/Skalieren, Menü
+// WebXR-Viewer für Fusion-Exporte: Laden, Live-Sync, Greifen/Skalieren, Menü, Werkzeuge
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
@@ -6,6 +6,8 @@ import { MTLLoader } from 'three/addons/loaders/MTLLoader.js';
 import { ARButton } from 'three/addons/webxr/ARButton.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { Menu, Toast, createWristButton } from './ui.js';
+import { Exploder, Dimensions, MeasureTool, SectionTool } from './tools.js';
+import { Placement, AnchorManager, Shadows, setupLightEstimation } from './xr.js';
 
 // Gamepad-Belegung (xr-standard): 4 = A/X, 5 = B/Y
 const BTN_MENU = 4;
@@ -16,11 +18,13 @@ const SPAWN_WAIT_FRAMES = 30;   // Kopfposition stabilisiert sich erst nach eini
 const RAY_IDLE_LENGTH = 0.25;   // Strahl ohne Treffer
 const NEAR_GRAB = 0.05;         // Greifen ohne Strahltreffer, wenn Hand/Controller so nah am Modell ist
 
-let scene, camera, renderer;
+let scene, camera, renderer, mainLight;
 // modelGroup trägt Position, Drehung und Maßstab; content zentriert das Modell darin,
 // dadurch bleibt der Griffpunkt beim Skalieren stehen
 let modelGroup, content;
-let menu, toast, wristButton;
+let menu, toast, wristButton, highlight;
+let exploder, dimensions, measure, section;
+let placement, anchors, shadows;
 const pointers = [];            // je Controller bzw. Hand: Strahl, Treffer, Eingabequelle
 let leftHand = null;
 
@@ -30,18 +34,28 @@ let loadedVersion = null;
 let loading = false;
 let sseConnected = false;
 let modelRadius = 0.1;          // in Metern bei Maßstab 1
+let modelLocalBox = new THREE.Box3();   // Hüllquader im Raum von content, nicht explodiert
 
 let baseScale = 1;              // GLB: Meter -> 1, OBJ: cm -> 0.01
 let userScale = 1;
 let spawnFrames = -1;           // >= 0: Platzierung ausstehend
 let upright = false;            // nur um die Hochachse drehen
 let displayMode = 'normal';     // normal | wire | xray
+let tool = 'grab';              // grab | place | measure
+let explode = 0;
+let roomLight = false;
+
+// Bauteile: Knoten je Körper, Sichtbarkeit über einen stabilen Schlüssel (Pfad)
+let bodyNodes = [];
+const hiddenKeys = new Set();
+let soloKey = null;
 
 // Greifen
 const grabbing = new Set();
 const grabOffset = { pos: new THREE.Vector3(), rot: new THREE.Quaternion() };
 let initialDistance = 0;
 let initialUserScale = 1;
+let gizmoGrab = null;           // Zeiger, der gerade die Schnittebene hält
 const prevButtons = new Map();
 
 const raycaster = new THREE.Raycaster();
@@ -61,15 +75,16 @@ function init() {
     renderer.setPixelRatio(window.devicePixelRatio);
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.localClippingEnabled = true;
     renderer.xr.enabled = true;
     document.body.appendChild(renderer.domElement);
 
-    // Umgebungslicht für Metall und Glas, dazu ein Richtungslicht für Kontrast
+    // Umgebungslicht für Metall und Glas, dazu ein Richtungslicht für Kontrast und Schatten
     const pmrem = new THREE.PMREMGenerator(renderer);
     scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-    const dirLight = new THREE.DirectionalLight(0xffffff, 1.0);
-    dirLight.position.set(2, 5, 2);
-    scene.add(dirLight);
+    mainLight = new THREE.DirectionalLight(0xffffff, 1.0);
+    mainLight.position.set(2, 5, 2);
+    scene.add(mainLight);
 
     modelGroup = new THREE.Group();
     modelGroup.position.set(0, 0, -1);
@@ -77,23 +92,49 @@ function init() {
     content = new THREE.Group();
     modelGroup.add(content);
 
+    exploder = new Exploder(content);
+    dimensions = new Dimensions(modelGroup);
+    measure = new MeasureTool(scene, content, exploder);
+    section = new SectionTool(modelGroup);
+    placement = new Placement(scene);
+    anchors = new AnchorManager();
+    shadows = new Shadows(renderer, scene, mainLight);
+    setupLightEstimation(renderer, scene, mainLight, on => { roomLight = on; updateMenu(); });
+
     menu = new Menu();
     scene.add(menu.mesh);
     toast = new Toast();
     scene.add(toast.mesh);
     wristButton = createWristButton();
     scene.add(wristButton);
+    highlight = new THREE.BoxHelper(undefined, 0xffd400);
+    highlight.material.depthTest = false;
+    highlight.renderOrder = 997;
+    highlight.visible = false;
+    scene.add(highlight);
 
-    const arBtn = ARButton.createButton(renderer, { optionalFeatures: ['local-floor', 'hit-test', 'hand-tracking'] });
+    const arBtn = ARButton.createButton(renderer, {
+        optionalFeatures: ['local-floor', 'hit-test', 'hand-tracking', 'anchors', 'light-estimation'],
+    });
     document.body.appendChild(arBtn);
 
     for (let i = 0; i < 2; i++) setupPointer(i);
 
-    renderer.xr.addEventListener('sessionstart', () => { spawnFrames = 0; });
-    renderer.xr.addEventListener('sessionend', () => { frameDesktopCamera(); });
+    renderer.xr.addEventListener('sessionstart', onSessionStart);
+    renderer.xr.addEventListener('sessionend', () => {
+        anchors.reset();
+        placement.stop();
+        if (tool === 'place') tool = 'grab';
+        frameDesktopCamera();
+        updateMenu();
+    });
 
     // Zugriff für Debugging in der Browser-Konsole
-    window.__viewer = { scene, camera, modelGroup, content, renderer, menu, pointers, pressButton: onMenuButton, toggleMenu, onSelectStart, onSelectEnd };
+    window.__viewer = {
+        scene, camera, modelGroup, content, renderer, menu, pointers, measure, section, exploder,
+        pressButton: onMenuButton, toggleMenu, onSelectStart, onSelectEnd, placeOnSurface,
+        render,   // einzelnes Frame, falls die Seite im Hintergrund läuft
+    };
 
     updateMenu();
     checkForUpdates();
@@ -101,6 +142,35 @@ function init() {
     setInterval(() => { if (!sseConnected) checkForUpdates(); }, POLL_MS);
     window.addEventListener('resize', onWindowResize);
     renderer.setAnimationLoop(render);
+}
+
+function docKey() {
+    return sceneMeta ? (sceneMeta.document || 'model') : null;
+}
+
+async function onSessionStart() {
+    spawnFrames = 0;
+    shadows.surfaceY = null;
+    updateMenu();
+    // Gespeicherten Platz für dieses Dokument wiederherstellen statt neu zu platzieren
+    const key = docKey();
+    if (!key || !anchors.hasStored(key)) return;
+    spawnFrames = -1;
+    anchors.docKey = key;
+    const stored = await anchors.restore(renderer.xr.getSession(), key);
+    if (stored) {
+        if (stored.userScale) setUserScale(stored.userScale);
+        if (stored.surfaceY !== undefined) shadows.surfaceY = stored.surfaceY;
+        setStatus('Platz wiederhergestellt');
+    } else {
+        spawnFrames = 0;
+    }
+}
+
+function anchorModel() {
+    if (!renderer.xr.isPresenting) return;
+    anchors.docKey = docKey();
+    anchors.request(modelGroup.position, modelGroup.quaternion, { userScale, surfaceY: shadows.surfaceY ?? undefined });
 }
 
 // -----------------------------------------------------------------------------
@@ -122,7 +192,12 @@ function setupPointer(idx) {
     const p = { ctrl, line, dot, source: null, hit: null };
     pointers.push(p);
     ctrl.addEventListener('connected', e => { p.source = e.data; line.visible = true; });
-    ctrl.addEventListener('disconnected', () => { p.source = null; line.visible = false; dot.visible = false; grabbing.delete(p); });
+    ctrl.addEventListener('disconnected', () => {
+        p.source = null;
+        line.visible = false;
+        dot.visible = false;
+        onSelectEnd(p);
+    });
     ctrl.addEventListener('selectstart', () => onSelectStart(p));
     ctrl.addEventListener('selectend', () => onSelectEnd(p));
 
@@ -132,6 +207,12 @@ function setupPointer(idx) {
     hand.addEventListener('disconnected', () => { if (leftHand === hand) leftHand = null; });
 }
 
+// Ausgeblendete Körper sollen weder getroffen noch gemessen werden
+function isShown(obj) {
+    for (let o = obj; o && o !== content; o = o.parent) if (!o.visible) return false;
+    return true;
+}
+
 function updatePointer(p) {
     if (!p.source) return;
     tmpMatrix.identity().extractRotation(p.ctrl.matrixWorld);
@@ -139,19 +220,27 @@ function updatePointer(p) {
     raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tmpMatrix);
 
     p.hit = null;
-    const ui = [menu.mesh, wristButton].filter(m => m.visible);
+    const ui = [menu.mesh, wristButton, section.handle].filter(m => m.visible && isVisibleInScene(m));
     const uiHit = raycaster.intersectObjects(ui, false)[0];
-    if (uiHit) {
+    const modelHit = raycaster.ray.intersectsBox(modelBox)
+        ? raycaster.intersectObject(content, true).find(h => isShown(h.object)) : null;
+    // Menü und Handgelenk haben Vorrang; die Schnittebene nur, wenn sie vor dem Modell liegt
+    if (uiHit && (uiHit.object.userData.uiKind !== 'section' || !modelHit || uiHit.distance < modelHit.distance)) {
         p.hit = { kind: uiHit.object.userData.uiKind, point: uiHit.point, distance: uiHit.distance, uv: uiHit.uv };
-    } else if (raycaster.ray.intersectsBox(modelBox)) {
-        const modelHit = raycaster.intersectObject(content, true)[0];
-        if (modelHit) p.hit = { kind: 'model', point: modelHit.point, distance: modelHit.distance };
+    } else if (modelHit) {
+        p.hit = { kind: 'model', point: modelHit.point, distance: modelHit.distance, object: modelHit.object, face: modelHit.face };
     }
 
-    p.line.scale.z = p.hit ? p.hit.distance : RAY_IDLE_LENGTH;
-    p.line.material.color.set(grabbing.has(p) ? 0x00ff66 : p.hit ? 0x66ccff : 0xffffff);
+    const placing = tool === 'place' && placement.hit && placement.pointer === p;
+    p.line.scale.z = p.hit ? p.hit.distance : placing ? p.ctrl.position.distanceTo(placement.hit.position) : RAY_IDLE_LENGTH;
+    p.line.material.color.set(grabbing.has(p) || gizmoGrab === p ? 0x00ff66 : p.hit ? 0x66ccff : 0xffffff);
     p.dot.visible = !!p.hit;
     if (p.hit) p.dot.position.copy(p.hit.point);
+}
+
+function isVisibleInScene(obj) {
+    for (let o = obj; o; o = o.parent) if (!o.visible) return false;
+    return true;
 }
 
 function isNearModel(p) {
@@ -161,23 +250,50 @@ function isNearModel(p) {
 
 function onSelectStart(p) {
     updatePointer(p);
-    if (p.hit && p.hit.kind === 'menu') {
-        const b = menu.buttonAt(p.hit.uv);
-        if (b) onMenuButton(b.id);
+    const hit = p.hit;
+    if (hit && hit.kind === 'menu') {
+        const b = menu.buttonAt(hit.uv);
+        if (b) onMenuButton(b.id, b.value);
+        // Regler: weiter ziehen, solange gedrückt
+        if (b && b.value !== undefined) p.dragSlider = b.id;
         return;
     }
-    if (p.hit && p.hit.kind === 'wrist') {
-        toggleMenu();
+    if (hit && hit.kind === 'wrist') return toggleMenu();
+    if (hit && hit.kind === 'section') {
+        gizmoGrab = p;
+        p.ctrl.attach(section.gizmo);
         return;
     }
-    if ((p.hit && p.hit.kind === 'model') || isNearModel(p)) {
+    if (tool === 'place') {
+        if (placement.hit) placeOnSurface(placement.hit);
+        return;
+    }
+    if (tool === 'measure') {
+        if (hit && hit.kind === 'model') {
+            const item = measure.addPoint(hit, bodyKey);
+            if (item) setStatus(`Abstand ${measure.distanceMm(item, unitToMm()).toFixed(1).replace('.', ',')} mm`);
+        }
+        return;
+    }
+    if ((hit && hit.kind === 'model') || isNearModel(p)) {
         grabbing.add(p);
         updateGrabState();
     }
 }
 
 function onSelectEnd(p) {
-    if (grabbing.delete(p)) updateGrabState();
+    p.dragSlider = null;
+    if (gizmoGrab === p) {
+        modelGroup.attach(section.gizmo);
+        gizmoGrab = null;
+    }
+    if (grabbing.delete(p)) {
+        updateGrabState();
+        if (!grabbing.size) {
+            shadows.surfaceY = null;   // frei bewegt: Schatten wieder auf den Boden
+            anchorModel();
+        }
+    }
 }
 
 // -----------------------------------------------------------------------------
@@ -235,6 +351,35 @@ function updateGrab() {
     }
 }
 
+const SURFACE_LABELS = { floor: 'Auf Fläche platziert', wall: 'An Wand platziert', ceiling: 'An Decke platziert' };
+
+// Modell bleibt aufrecht. Boden/Decke: Blickrichtung bleibt; Wand: Vorderseite (+Z) zeigt in den Raum.
+// Danach entlang der Normalen verschieben, bis die zur Fläche zeigende Seite sie berührt.
+function placeOnSurface(hit) {
+    const n = hit.normal.clone().normalize();
+    if (hit.surface === 'wall') {
+        modelGroup.quaternion.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.atan2(n.x, n.z));
+    } else {
+        modelGroup.quaternion.copy(yawOnly(modelGroup.quaternion));
+    }
+    modelGroup.position.copy(hit.position);
+    modelGroup.updateMatrixWorld(true);
+    // Ecken des modellfesten Hüllquaders – enger als ein achsparalleler Quader in Weltkoordinaten
+    const { min, max } = modelLocalBox;
+    let nearest = Infinity;
+    for (let i = 0; i < 8; i++) {
+        const c = new THREE.Vector3(i & 1 ? max.x : min.x, i & 2 ? max.y : min.y, i & 4 ? max.z : min.z)
+            .applyMatrix4(content.matrixWorld);
+        nearest = Math.min(nearest, c.sub(hit.position).dot(n));
+    }
+    modelGroup.position.addScaledVector(n, -nearest);
+    // Schatten auf die Fläche nur, wenn das Modell darauf steht – sonst auf den Boden
+    shadows.surfaceY = hit.surface === 'floor' ? hit.position.y : null;
+    setTool('grab');
+    anchorModel();
+    setStatus(SURFACE_LABELS[hit.surface]);
+}
+
 // -----------------------------------------------------------------------------
 // Menü und Einstellungen
 // -----------------------------------------------------------------------------
@@ -243,21 +388,85 @@ function toggleMenu() {
     else menu.openInFront(camera);
 }
 
-function onMenuButton(id) {
-    if (id.startsWith('scale:')) {
-        setUserScale(1 / Number(id.slice(6)));
-    } else if (id.startsWith('mode:')) {
-        displayMode = id.slice(5);
-        applyDisplayMode();
-    } else if (id === 'upright') {
-        upright = !upright;
-        if (upright) modelGroup.quaternion.copy(yawOnly(modelGroup.quaternion));
-    } else if (id === 'reset') {
-        resetView();
-    } else if (id === 'close') {
-        menu.close();
+function setTool(t) {
+    if (t === 'place' && !renderer.xr.isPresenting) return;
+    if (tool === 'measure' && t !== 'measure') measure.cancelPending();
+    tool = t;
+    if (t === 'place') placement.start();
+    else placement.stop();
+    updateMenu();
+}
+
+function onMenuButton(id, value) {
+    const [kind, arg, idx] = id.split(':');
+    switch (kind) {
+        case 'page': menu.setPage(arg); break;
+        case 'scale': setUserScale(1 / Number(arg)); anchorModel(); break;
+        case 'mode': displayMode = arg; applyDisplayMode(); break;
+        case 'tool':
+            setTool(arg);
+            if (arg !== 'grab') menu.close();
+            if (arg === 'measure') setStatus('Zwei Punkte am Modell antippen');
+            if (arg === 'place') setStatus('Auf Boden, Tisch, Wand oder Decke zielen und drücken');
+            break;
+        case 'upright':
+            upright = !upright;
+            if (upright) modelGroup.quaternion.copy(yawOnly(modelGroup.quaternion));
+            break;
+        case 'shadows': shadows.enabled = !shadows.enabled; break;
+        case 'dims': dimensions.group.visible = !dimensions.group.visible; break;
+        case 'section':
+            section.setBox(sectionBox());
+            section.setEnabled(!section.enabled, content);
+            break;
+        case 'axis': section.setBox(sectionBox()); section.setAxis(arg); break;
+        case 'flip': section.flip(); break;
+        case 'explode': explode = value; exploder.set(explode); break;
+        case 'clearMeasure': measure.clear(); break;
+        case 'bodies':
+            if (arg === 'prev') menu.flipBodyPage(-1);
+            if (arg === 'next') menu.flipBodyPage(1);
+            if (arg === 'all') { hiddenKeys.clear(); soloKey = null; applyBodyVisibility(); }
+            break;
+        case 'body': onBodyButton(arg, Number(idx)); break;
+        case 'reset': resetView(); break;
+        case 'close': menu.close(); break;
     }
     updateMenu();
+}
+
+function onBodyButton(action, idx) {
+    const node = bodyNodes[idx];
+    if (!node) return;
+    const key = bodyKey(node);
+    if (action === 'toggle') {
+        if (soloKey) { soloKey = null; hiddenKeys.clear(); bodyNodes.forEach(n => { if (n !== node) hiddenKeys.add(bodyKey(n)); }); }
+        if (hiddenKeys.has(key)) hiddenKeys.delete(key);
+        else hiddenKeys.add(key);
+    } else if (action === 'solo') {
+        soloKey = soloKey === key ? null : key;
+    }
+    applyBodyVisibility();
+}
+
+function bodyKey(obj) {
+    for (let o = obj; o && o !== content; o = o.parent) {
+        if (o.userData.kind === 'body' || bodyNodes.includes(o)) return o.userData.path || o.name || o.uuid;
+    }
+    return obj.userData.path || obj.name || obj.uuid;
+}
+
+function applyBodyVisibility() {
+    for (const n of bodyNodes) {
+        const key = bodyKey(n);
+        n.visible = soloKey ? key === soloKey : !hiddenKeys.has(key);
+    }
+    menu.setBodies(bodyNodes.map(n => ({ name: n.name || '(ohne Namen)', visible: n.visible, solo: soloKey === bodyKey(n) })));
+}
+
+function sectionBox() {
+    // Hüllquader im Raum von modelGroup (content ist darin verschoben)
+    return modelLocalBox.clone().translate(content.position);
 }
 
 function setUserScale(s) {
@@ -272,6 +481,11 @@ function applyScale() {
     updateMenu();
 }
 
+// Längeneinheit des Modells (Raum von content) in mm
+function unitToMm() {
+    return sceneMeta && sceneMeta.format === 'obj' ? 10 : 1000;
+}
+
 function scaleLabel() {
     // OBJ: Fusion exportiert in cm, baseScale 0.01 entspricht 1:1
     const s = userScale;
@@ -283,26 +497,30 @@ function scaleLabel() {
     return `${s.toFixed(s < 10 ? 1 : 0)}:1`;
 }
 
-function updateMenu() {
-    if (!menu) return;
-    const lines = [sceneMeta ? (sceneMeta.document || 'Fusion') : 'Fusion → WebXR'];
-    if (sceneMeta) {
-        lines.push(sceneMeta.format === 'glb'
-            ? `${sceneMeta.bodies.length} Körper · ${sceneMeta.triangles.toLocaleString('de-DE')} Dreiecke`
-            : 'OBJ-Export (Maßstab angenommen: cm)');
-        lines.push(`Maßstab ${scaleLabel()}` + (sizeLabel() ? ` · ${sizeLabel()}` : ''));
-    }
-    lines.push(statusLine);
-    menu.setInfo(lines);
-    menu.setState({ scaleLabel: scaleLabel(), mode: displayMode, upright });
-    document.getElementById('status').textContent = lines.join('\n');
-}
-
 function sizeLabel() {
     if (!sceneMeta || !sceneMeta.bbox) return '';
     const [min, max] = sceneMeta.bbox;
     // Fusion-Maße in mm (bbox in Metern, Reihenfolge wie in Fusion X × Y × Z)
     return max.map((v, i) => Math.round((v - min[i]) * 1000)).join(' × ') + ' mm';
+}
+
+function updateMenu() {
+    if (!menu) return;
+    const lines = [sceneMeta ? (sceneMeta.document || 'Fusion') : 'Fusion → WebXR'];
+    if (sceneMeta) {
+        lines.push((sceneMeta.format === 'glb'
+            ? `${sceneMeta.bodies.length} Körper · ${sceneMeta.triangles.toLocaleString('de-DE')} Dreiecke`
+            : 'OBJ-Export (Maßstab angenommen: cm)') + (roomLight ? ' · Raumlicht' : ''));
+        lines.push(`Maßstab ${scaleLabel()}` + (sizeLabel() ? ` · ${sizeLabel()}` : ''));
+    }
+    lines.push(statusLine);
+    menu.setInfo(lines);
+    menu.setState({
+        scaleLabel: scaleLabel(), mode: displayMode, upright, tool, explode,
+        shadows: shadows.enabled, dims: dimensions.group.visible,
+        section: section.enabled, sectionAxis: section.axis, xr: renderer.xr.isPresenting,
+    });
+    document.getElementById('status').textContent = lines.join('\n');
 }
 
 function setStatus(text, opts) {
@@ -424,12 +642,26 @@ function disposeObject(obj) {
     });
 }
 
+function collectBodyNodes(obj) {
+    const nodes = [];
+    obj.traverse(o => { if (o.userData.kind === 'body') nodes.push(o); });
+    // OBJ hat keine Metadaten: jedes Mesh ist ein Körper
+    if (!nodes.length) obj.traverse(o => { if (o.isMesh) nodes.push(o); });
+    return nodes;
+}
+
 function setContent(obj, meta) {
     const firstLoad = !sceneMeta;
     // Nur beim ersten Laden, nach Dokumentwechsel oder Formatwechsel neu zentrieren.
     // Sonst bleibt der Fusion-Ursprung stehen und vorhandene Geometrie springt nicht,
     // wenn etwas dazukommt.
     const recenter = firstLoad || meta.document !== sceneMeta.document || meta.format !== sceneMeta.format;
+    if (!firstLoad && meta.document !== sceneMeta.document) {
+        hiddenKeys.clear();
+        soloKey = null;
+        measure.clear();
+    }
+    highlight.visible = false;
     while (content.children.length) {
         const old = content.children[0];
         content.remove(old);
@@ -439,13 +671,23 @@ function setContent(obj, meta) {
     // solange obj noch keinen Elternknoten hat
     obj.updateMatrixWorld(true);
     const box = new THREE.Box3().setFromObject(obj);
+    modelLocalBox = box.clone();
     if (recenter) content.position.copy(box.getCenter(new THREE.Vector3())).negate();
     content.add(obj);
 
     baseScale = meta.format === 'obj' ? 0.01 : 1;
     sceneMeta = meta;
     applyScale();
+
+    bodyNodes = collectBodyNodes(obj);
+    exploder.prepare(bodyNodes);
+    applyBodyVisibility();
+    measure.remap(key => bodyNodes.find(n => bodyKey(n) === key));
     applyDisplayMode();
+    section.setBox(sectionBox());
+    section.apply(content);
+    shadows.setMeshes(obj);
+    dimensions.rebuild(box, unitToMm());
 
     modelRadius = Math.max(box.getSize(new THREE.Vector3()).length() / 2, 0.001) * baseScale;
 
@@ -466,6 +708,8 @@ function spawnInFront() {
     modelGroup.position.copy(camPos).add(dir.multiplyScalar(distance));
     modelGroup.quaternion.identity();
     modelGroup.lookAt(camPos.x, modelGroup.position.y, camPos.z);
+    shadows.surfaceY = null;
+    anchorModel();
 }
 
 function recenterContent() {
@@ -476,6 +720,7 @@ function recenterContent() {
     // setFromObject rechnet in Weltkoordinaten – zurück in den lokalen Raum von content
     box.applyMatrix4(content.matrixWorld.clone().invert());
     content.position.copy(box.getCenter(new THREE.Vector3())).negate();
+    section.setBox(sectionBox());
 }
 
 function resetView() {
@@ -521,6 +766,35 @@ function updateWristButton() {
     wristButton.lookAt(new THREE.Vector3().setFromMatrixPosition(camera.matrixWorld));
 }
 
+// Zeiger fürs Platzieren: bevorzugt rechts
+function placementPointer() {
+    return pointers.find(p => p.source && p.source.handedness === 'right') || pointers.find(p => p.source) || null;
+}
+
+function updateXR() {
+    const frame = renderer.xr.getFrame();
+    const session = renderer.xr.getSession();
+    if (!frame || !session) return;
+    const refSpace = renderer.xr.getReferenceSpace();
+
+    placement.pointer = placementPointer();
+    placement.update(frame, refSpace, session, placement.pointer);
+
+    const pose = anchors.update(frame, refSpace, session);
+    // Solange gegriffen wird, bestimmt die Hand die Lage, sonst der Anker
+    if (pose && !grabbing.size) {
+        const s = new THREE.Vector3();
+        pose.decompose(modelGroup.position, modelGroup.quaternion, s);
+    }
+}
+
+function updateHighlight() {
+    const m = menu.visible && menu.page === 'bodies' && /^body:hover:(\d+)$/.exec(menu.hovered || '');
+    const node = m ? bodyNodes[Number(m[1])] : null;
+    highlight.visible = !!(node && node.visible);
+    if (highlight.visible) highlight.setFromObject(node);
+}
+
 function render() {
     if (renderer.xr.isPresenting && spawnFrames >= 0 && ++spawnFrames > SPAWN_WAIT_FRAMES) {
         spawnInFront();
@@ -528,16 +802,29 @@ function render() {
     }
 
     handleButtons();
+    updateXR();
     updateGrab();
 
+    modelGroup.updateMatrixWorld(true);
     modelBox.setFromObject(content);
     updateWristButton();
     let hover = null;
     for (const p of pointers) {
         updatePointer(p);
-        if (p.hit && p.hit.kind === 'menu') hover = (menu.buttonAt(p.hit.uv) || {}).id || null;
+        if (p.hit && p.hit.kind === 'menu') {
+            const b = menu.buttonAt(p.hit.uv);
+            hover = b ? b.id : null;
+            // Regler ziehen
+            if (p.dragSlider && b && b.id === p.dragSlider) onMenuButton(b.id, b.value);
+        }
     }
     if (menu.visible) menu.setHover(hover);
+    updateHighlight();
+
+    section.update();
+    measure.update(unitToMm());
+    dimensions.update(content.position, modelGroup.scale.x);
+    shadows.update(modelBox, renderer.xr.isPresenting);
     toast.update(camera);
 
     renderer.render(scene, camera);
