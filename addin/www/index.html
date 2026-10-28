@@ -7,10 +7,20 @@
     <style>
         body { margin: 0; background: #222; overflow: hidden; font-family: sans-serif; }
         #status { position: absolute; top: 12px; left: 12px; color: #ddd; font: 14px monospace; white-space: pre; pointer-events: none; }
+        #pair { position: absolute; top: 110px; left: 12px; color: #ddd; font: 16px sans-serif; display: flex; gap: 8px; align-items: center; }
+        #pair[hidden] { display: none; }
+        #pair input { width: 5em; font-size: 22px; padding: 6px; letter-spacing: 4px; text-align: center; }
+        #pair button { font-size: 18px; padding: 8px 14px; }
     </style>
 </head>
 <body>
     <div id="status"></div>
+    <!-- Kopplung vor dem AR-Start: PIN aus der Fusion-Meldung „Server gestartet“ -->
+    <form id="pair" hidden>
+        <label for="pin">Rückkanal-PIN</label>
+        <input id="pin" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="off">
+        <button type="submit">Koppeln</button>
+    </form>
 
     <!-- Three.js liegt lokal unter vendor/, damit alles ohne Internet läuft -->
     <script type="importmap">

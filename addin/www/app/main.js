@@ -8,10 +8,14 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { Menu, Toast, createWristButton } from './ui.js';
 import { Exploder, Dimensions, MeasureTool, SectionTool } from './tools.js';
 import { Placement, AnchorManager, Shadows, setupLightEstimation } from './xr.js';
+import { Remote, SelectionView } from './remote.js';
 
-// Gamepad-Belegung (xr-standard): 4 = A/X, 5 = B/Y
+// Gamepad-Belegung (xr-standard): 0 = Trigger, 1 = Greiftaste, 4 = A/X, 5 = B/Y
+// Trigger wählt aus, Greiftaste bewegt; B (rechts) isoliert, Y (links) blendet aus
 const BTN_MENU = 4;
-const BTN_RESET = 5;
+const BTN_BODY = 5;
+const HAND_TAP_MS = 250;        // Handtracking: kürzer gekniffen = auswählen, länger = greifen
+const HAND_TAP_MOVE = 0.015;    // ... oder die Hand hat sich so weit (m) bewegt
 const POLL_MS = 2000;           // nur als Rückfall, solange keine SSE-Verbindung steht
 const SPAWN_DISTANCE = 0.6;
 const SPAWN_WAIT_FRAMES = 30;   // Kopfposition stabilisiert sich erst nach einigen Frames
@@ -25,6 +29,7 @@ let modelGroup, content;
 let menu, toast, wristButton, highlight;
 let exploder, dimensions, measure, section;
 let placement, anchors, shadows;
+let remote, selectionView, sectionPlanes;
 const pointers = [];            // je Controller bzw. Hand: Strahl, Treffer, Eingabequelle
 let leftHand = null;
 
@@ -41,7 +46,7 @@ let userScale = 1;
 let spawnFrames = -1;           // >= 0: Platzierung ausstehend
 let upright = false;            // nur um die Hochachse drehen
 let displayMode = 'normal';     // normal | wire | xray
-let tool = 'grab';              // grab | place | measure
+let tool = 'select';            // select | place | measure (Greifen geht immer über die Greiftaste)
 let explode = 0;
 let roomLight = false;
 
@@ -49,6 +54,12 @@ let roomLight = false;
 let bodyNodes = [];
 const hiddenKeys = new Set();
 let soloKey = null;
+
+// Rückkanal: Auswahl (Körperpfade, gespiegelt mit Fusion) und Benutzerparameter
+const selectedKeys = new Set();
+let params = [];                // Stand aus Fusion
+const paramLocal = new Map();   // name -> { value, pending }: gezogen bzw. gesendet, noch nicht bestätigt
+let pinDigits = '';             // Eingabe auf der Kopplungsseite
 
 // Greifen
 const grabbing = new Set();
@@ -99,6 +110,9 @@ function init() {
     placement = new Placement(scene);
     anchors = new AnchorManager();
     shadows = new Shadows(renderer, scene, mainLight);
+    sectionPlanes = [section.plane];
+    remote = new Remote();
+    selectionView = new SelectionView(scene);
     setupLightEstimation(renderer, scene, mainLight, on => { roomLight = on; updateMenu(); });
 
     menu = new Menu();
@@ -124,7 +138,7 @@ function init() {
     renderer.xr.addEventListener('sessionend', () => {
         anchors.reset();
         placement.stop();
-        if (tool === 'place') tool = 'grab';
+        if (tool === 'place') tool = 'select';
         frameDesktopCamera();
         updateMenu();
     });
@@ -132,13 +146,23 @@ function init() {
     // Zugriff für Debugging in der Browser-Konsole
     window.__viewer = {
         scene, camera, modelGroup, content, renderer, menu, pointers, measure, section, exploder,
-        pressButton: onMenuButton, toggleMenu, onSelectStart, onSelectEnd, placeOnSurface,
+        pressButton: onMenuButton, toggleMenu, onSelectStart, onSelectEnd, onSqueezeStart, onSqueezeEnd,
+        isolateBodies, hideBodies, placeOnSurface,
+        remote, selectionView, selectedKeys, setSelection, setParams, commitParam,
         render,   // einzelnes Frame, falls die Seite im Hintergrund läuft
     };
 
     updateMenu();
     checkForUpdates();
     connectEvents();
+    remote.check().then(() => { refreshParams(); updateMenu(); });
+    document.getElementById('pair').addEventListener('submit', async e => {
+        e.preventDefault();
+        const input = document.getElementById('pin');
+        const ok = await submitPin(input.value.trim());
+        input.value = '';
+        if (!ok) setStatus(menu.pin.message, { error: true });
+    });
     setInterval(() => { if (!sseConnected) checkForUpdates(); }, POLL_MS);
     window.addEventListener('resize', onWindowResize);
     renderer.setAnimationLoop(render);
@@ -196,10 +220,14 @@ function setupPointer(idx) {
         p.source = null;
         line.visible = false;
         dot.visible = false;
+        p.pinch = null;
         onSelectEnd(p);
+        onSqueezeEnd(p);
     });
     ctrl.addEventListener('selectstart', () => onSelectStart(p));
     ctrl.addEventListener('selectend', () => onSelectEnd(p));
+    ctrl.addEventListener('squeezestart', () => onSqueezeStart(p));
+    ctrl.addEventListener('squeezeend', () => onSqueezeEnd(p));
 
     const hand = renderer.xr.getHand(idx);
     scene.add(hand);
@@ -248,7 +276,13 @@ function isNearModel(p) {
     return !modelBox.isEmpty() && modelBox.distanceToPoint(pos) < NEAR_GRAB;
 }
 
+function isHand(p) {
+    return !!(p.source && p.source.hand);
+}
+
+// Trigger bzw. Kneifen: Menü, Werkzeuge und Auswahl. Bewegt wird mit der Greiftaste.
 function onSelectStart(p) {
+    p.pressed = true;
     updatePointer(p);
     const hit = p.hit;
     if (hit && hit.kind === 'menu') {
@@ -259,11 +293,7 @@ function onSelectStart(p) {
         return;
     }
     if (hit && hit.kind === 'wrist') return toggleMenu();
-    if (hit && hit.kind === 'section') {
-        gizmoGrab = p;
-        p.ctrl.attach(section.gizmo);
-        return;
-    }
+    if (hit && hit.kind === 'section') return startGizmoGrab(p, 'select');
     if (tool === 'place') {
         if (placement.hit) placeOnSurface(placement.hit);
         return;
@@ -275,14 +305,66 @@ function onSelectStart(p) {
         }
         return;
     }
-    if ((hit && hit.kind === 'model') || isNearModel(p)) {
-        grabbing.add(p);
-        updateGrabState();
+    // Hände haben keine Greiftaste: kurz kneifen wählt aus, gehalten oder bewegt wird gegriffen
+    if (isHand(p)) {
+        p.pinch = { time: performance.now(), pos: new THREE.Vector3().setFromMatrixPosition(p.ctrl.matrixWorld), hit };
+        return;
     }
+    selectBody(p, hit);
 }
 
 function onSelectEnd(p) {
+    p.pressed = false;
+    // Parameter erst beim Loslassen senden – Fusion braucht für die Neuberechnung Zeit
+    if (p.dragSlider && p.dragSlider.startsWith('param:')) commitParam(Number(p.dragSlider.slice(6)));
     p.dragSlider = null;
+    if (p.pinch) {
+        const hit = p.pinch.hit;
+        p.pinch = null;
+        selectBody(p, hit);
+    }
+    releaseGrab(p, 'select');
+}
+
+function onSqueezeStart(p) {
+    updatePointer(p);
+    const hit = p.hit;
+    if (hit && hit.kind === 'section') return startGizmoGrab(p, 'squeeze');
+    if (hit && (hit.kind === 'menu' || hit.kind === 'wrist')) return;
+    // Mit der Greiftaste braucht man nicht genau zu zielen
+    if (!modelBox.isEmpty()) startGrab(p, 'squeeze');
+}
+
+function onSqueezeEnd(p) {
+    releaseGrab(p, 'squeeze');
+}
+
+// Handtracking: Kneifen wird zum Greifen, sobald es lange genug dauert oder die Hand wandert
+function updatePinch(p) {
+    if (!p.pinch) return;
+    const moved = new THREE.Vector3().setFromMatrixPosition(p.ctrl.matrixWorld).distanceTo(p.pinch.pos);
+    if (performance.now() - p.pinch.time < HAND_TAP_MS && moved < HAND_TAP_MOVE) return;
+    const onModel = (p.pinch.hit && p.pinch.hit.kind === 'model') || isNearModel(p);
+    p.pinch = null;
+    if (onModel) startGrab(p, 'select');
+}
+
+function startGrab(p, by) {
+    p.grabBy = by;
+    grabbing.add(p);
+    updateGrabState();
+}
+
+function startGizmoGrab(p, by) {
+    p.grabBy = by;
+    gizmoGrab = p;
+    p.ctrl.attach(section.gizmo);
+}
+
+// Nur die Taste, die das Greifen begonnen hat, beendet es
+function releaseGrab(p, by) {
+    if (p.grabBy !== by) return;
+    p.grabBy = null;
     if (gizmoGrab === p) {
         modelGroup.attach(section.gizmo);
         gizmoGrab = null;
@@ -294,6 +376,13 @@ function onSelectEnd(p) {
             anchorModel();
         }
     }
+}
+
+// Zweiter Trigger gehalten: hinzufügen bzw. entfernen statt ersetzen; ins Leere: Auswahl aufheben
+function selectBody(p, hit) {
+    const additive = pointers.some(q => q !== p && q.pressed);
+    const key = hit && hit.kind === 'model' ? bodyKey(hit.object) : null;
+    if (key || !additive) selectInFusion(key, additive);
 }
 
 // -----------------------------------------------------------------------------
@@ -375,7 +464,7 @@ function placeOnSurface(hit) {
     modelGroup.position.addScaledVector(n, -nearest);
     // Schatten auf die Fläche nur, wenn das Modell darauf steht – sonst auf den Boden
     shadows.surfaceY = hit.surface === 'floor' ? hit.position.y : null;
-    setTool('grab');
+    setTool('select');
     anchorModel();
     setStatus(SURFACE_LABELS[hit.surface]);
 }
@@ -400,14 +489,18 @@ function setTool(t) {
 function onMenuButton(id, value) {
     const [kind, arg, idx] = id.split(':');
     switch (kind) {
-        case 'page': menu.setPage(arg); break;
+        case 'page':
+            menu.setPage(arg);
+            if (arg === 'params' && !remote.available) setStatus(remote.message || 'Verbinde mit Fusion...');
+            break;
         case 'scale': setUserScale(1 / Number(arg)); anchorModel(); break;
         case 'mode': displayMode = arg; applyDisplayMode(); break;
         case 'tool':
             setTool(arg);
-            if (arg !== 'grab') menu.close();
+            if (arg !== 'select') menu.close();
             if (arg === 'measure') setStatus('Zwei Punkte am Modell antippen');
             if (arg === 'place') setStatus('Auf Boden, Tisch, Wand oder Decke zielen und drücken');
+            if (arg === 'select') setStatus('Trigger: auswählen · Greiftaste: bewegen');
             break;
         case 'upright':
             upright = !upright;
@@ -426,9 +519,13 @@ function onMenuButton(id, value) {
         case 'bodies':
             if (arg === 'prev') menu.flipBodyPage(-1);
             if (arg === 'next') menu.flipBodyPage(1);
-            if (arg === 'all') { hiddenKeys.clear(); soloKey = null; applyBodyVisibility(); }
+            if (arg === 'all') showAllBodies();
             break;
         case 'body': onBodyButton(arg, Number(idx)); break;
+        case 'params': menu.flipParamPage(arg === 'next' ? 1 : -1); break;
+        case 'pair': pinDigits = ''; menu.setPin(''); menu.setPage('pair'); break;
+        case 'pin': onPinKey(arg); break;
+        case 'param': dragParam(Number(arg), value); break;
         case 'reset': resetView(); break;
         case 'close': menu.close(); break;
     }
@@ -439,6 +536,11 @@ function onBodyButton(action, idx) {
     const node = bodyNodes[idx];
     if (!node) return;
     const key = bodyKey(node);
+    if (action === 'hover') {
+        // Zeile antippen = auswählen (und in Fusion, wenn der Rückkanal steht)
+        selectInFusion(key, false);
+        return;
+    }
     if (action === 'toggle') {
         if (soloKey) { soloKey = null; hiddenKeys.clear(); bodyNodes.forEach(n => { if (n !== node) hiddenKeys.add(bodyKey(n)); }); }
         if (hiddenKeys.has(key)) hiddenKeys.delete(key);
@@ -447,6 +549,64 @@ function onBodyButton(action, idx) {
         soloKey = soloKey === key ? null : key;
     }
     applyBodyVisibility();
+}
+
+// Ziel für B/Y: die Auswahl, sonst der Körper unter dem Strahl dieses Controllers
+function targetKeys(p) {
+    if (selectedKeys.size) return [...selectedKeys].filter(k => bodyNodes.some(n => bodyKey(n) === k));
+    if (p) updatePointer(p);
+    return p && p.hit && p.hit.kind === 'model' ? [bodyKey(p.hit.object)] : [];
+}
+
+function keysLabel(keys) {
+    if (keys.length !== 1) return `${keys.length} Körper`;
+    const node = bodyNodes.find(n => bodyKey(n) === keys[0]);
+    return node ? node.name : keys[0].split('/').pop();
+}
+
+function showAllBodies() {
+    hiddenKeys.clear();
+    soloKey = null;
+    applyBodyVisibility();
+}
+
+// B: nur die Zielkörper zeigen; nochmal B (oder B ohne Ziel) zeigt wieder alles
+function isolateBodies(p) {
+    const keys = targetKeys(p);
+    const anyHidden = soloKey || hiddenKeys.size;
+    const isolated = keys.length && bodyNodes.every(n => keys.includes(bodyKey(n)) === n.visible);
+    if (!keys.length || isolated) {
+        if (anyHidden) {
+            showAllBodies();
+            setStatus('Alle Bauteile eingeblendet');
+        } else {
+            setStatus('Erst ein Bauteil auswählen oder darauf zielen');
+        }
+        return;
+    }
+    soloKey = null;
+    hiddenKeys.clear();
+    bodyNodes.forEach(n => { if (!keys.includes(bodyKey(n))) hiddenKeys.add(bodyKey(n)); });
+    applyBodyVisibility();
+    setStatus(`Isoliert: ${keysLabel(keys)} · B zeigt wieder alles`);
+}
+
+// Y: Zielkörper ausblenden; die Auswahl darauf entfällt
+function hideBodies(p) {
+    const keys = targetKeys(p);
+    if (!keys.length) {
+        setStatus('Erst ein Bauteil auswählen oder darauf zielen');
+        return;
+    }
+    if (soloKey) {
+        hiddenKeys.clear();
+        bodyNodes.forEach(n => { if (bodyKey(n) !== soloKey) hiddenKeys.add(bodyKey(n)); });
+        soloKey = null;
+    }
+    keys.forEach(k => hiddenKeys.add(k));
+    setSelection([...selectedKeys].filter(k => !keys.includes(k)), 'viewer');
+    applyBodyVisibility();
+    setStatus(`Ausgeblendet: ${keysLabel(keys)} · „Alle zeigen“ im Menü`);
 }
 
 function bodyKey(obj) {
@@ -461,7 +621,134 @@ function applyBodyVisibility() {
         const key = bodyKey(n);
         n.visible = soloKey ? key === soloKey : !hiddenKeys.has(key);
     }
-    menu.setBodies(bodyNodes.map(n => ({ name: n.name || '(ohne Namen)', visible: n.visible, solo: soloKey === bodyKey(n) })));
+    menu.setBodies(bodyNodes.map(n => ({
+        name: n.name || '(ohne Namen)', visible: n.visible, solo: soloKey === bodyKey(n), selected: selectedKeys.has(bodyKey(n)),
+    })));
+}
+
+// -----------------------------------------------------------------------------
+// Rückkanal: Auswahl und Parameter
+// -----------------------------------------------------------------------------
+// Die Auswahl gilt immer in der Brille (für B/Y); an Fusion geht sie nur mit Rückkanal und GLB-Pfaden
+function selectInFusion(key, additive) {
+    const mode = additive ? (selectedKeys.has(key) ? 'remove' : 'add') : 'replace';
+    // Sofort anzeigen; Fusion bestätigt per SSE (selection)
+    const next = mode === 'replace' ? new Set(key ? [key] : []) : new Set(selectedKeys);
+    if (mode === 'add') next.add(key);
+    if (mode === 'remove') next.delete(key);
+    setSelection([...next], 'viewer');
+    if (!remote.available || !sceneMeta || sceneMeta.format !== 'glb') return;
+    remote.send('select', { paths: key ? [key] : [], mode }).then(r => {
+        if (!r.ok) setStatus(r.message, { error: true });
+        updateMenu();
+    });
+}
+
+function setSelection(paths, origin) {
+    const changed = paths.length !== selectedKeys.size || paths.some(k => !selectedKeys.has(k));
+    selectedKeys.clear();
+    paths.forEach(k => selectedKeys.add(k));
+    if (!changed) return;
+    applySelection(true);
+    if (origin === 'fusion' && paths.length) {
+        const node = paths.length === 1 && bodyNodes.find(n => bodyKey(n) === paths[0]);
+        setStatus(paths.length === 1 ? `Fusion: ${node ? node.name : paths[0].split('/').pop()}` : `Fusion: ${paths.length} Körper ausgewählt`);
+    }
+}
+
+// fresh: neue Auswahl (Richtungspfeil zeigen), sonst nur neu geladenes Modell
+function applySelection(fresh) {
+    selectionView.set(bodyNodes.filter(n => selectedKeys.has(bodyKey(n))), fresh);
+    applyBodyVisibility();
+}
+
+// Ziffernblock: nach der vierten Ziffer wird sofort geprüft
+function onPinKey(key) {
+    if (key === 'cancel') return menu.setPage('params');
+    if (key === 'del') pinDigits = pinDigits.slice(0, -1);
+    else if (/^\d$/.test(key) && pinDigits.length < 4) pinDigits += key;
+    menu.setPin(pinDigits);
+    if (pinDigits.length === 4 && key !== 'del') submitPin(pinDigits);
+}
+
+async function submitPin(pin) {
+    menu.setPin(pin, 'Prüfe...');
+    const r = await remote.pair(pin);
+    pinDigits = '';
+    if (!r.ok) {
+        menu.setPin('', r.message);
+        return false;
+    }
+    menu.setPin('', '✓ Gekoppelt');
+    refreshParams();
+    updateMenu();
+    setStatus('Rückkanal aktiv');
+    setTimeout(() => { if (menu.page === 'pair') menu.setPage('params'); }, 900);
+    return true;
+}
+
+function setParams(list) {
+    params = list;
+    // Gesendete Werte gelten als bestätigt, sobald Fusion sie meldet; gezogene (nicht gesendete) bleiben
+    for (const p of list) {
+        const local = paramLocal.get(p.name);
+        if (local && local.pending && Math.abs(local.value - p.value) < p.step / 2) paramLocal.delete(p.name);
+    }
+    refreshParams();
+}
+
+function snapParam(p, t) {
+    const raw = p.min + THREE.MathUtils.clamp(t, 0, 1) * (p.max - p.min);
+    const v = THREE.MathUtils.clamp(Math.round(raw / p.step) * p.step, p.min, p.max);
+    return Number(v.toFixed(6));
+}
+
+function formatParam(p, v) {
+    const decimals = p.step >= 1 ? 0 : Math.min(4, Math.ceil(-Math.log10(p.step) - 1e-9));
+    return v.toFixed(decimals).replace('.', ',') + (p.unit ? ` ${p.unit}` : '');
+}
+
+function dragParam(idx, t) {
+    const p = params[idx];
+    if (!p || !p.editable) return;
+    paramLocal.set(p.name, { value: snapParam(p, t), pending: false });
+    refreshParams();
+}
+
+function commitParam(idx) {
+    const p = params[idx];
+    const local = p && paramLocal.get(p.name);
+    if (!local || local.pending) return;
+    if (Math.abs(local.value - p.value) < p.step / 2) {
+        paramLocal.delete(p.name);
+        refreshParams();
+        return;
+    }
+    local.pending = true;
+    refreshParams();
+    remote.send('param', { name: p.name, value: local.value }).then(r => {
+        if (r.ok) return;
+        paramLocal.delete(p.name);
+        refreshParams();
+        setStatus(r.message, { error: true });
+    });
+}
+
+function refreshParams() {
+    if (!menu) return;
+    // Ohne Rückkanal nur anzeigen – ein Regler, der nichts bewirkt, wäre irreführend
+    const editable = remote.available;
+    menu.setParams(params.map(p => {
+        const local = paramLocal.get(p.name);
+        const v = local ? local.value : p.value;
+        return {
+            name: p.name,
+            editable: p.editable && editable,
+            valueText: p.editable ? formatParam(p, v) : `= ${p.expression}`,
+            t: p.max > p.min ? THREE.MathUtils.clamp((v - p.min) / (p.max - p.min), 0, 1) : 0.5,
+            note: local && local.pending ? 'Fusion rechnet...' : '',
+        };
+    }), remote.available ? '' : remote.message);
 }
 
 function sectionBox() {
@@ -519,8 +806,11 @@ function updateMenu() {
         scaleLabel: scaleLabel(), mode: displayMode, upright, tool, explode,
         shadows: shadows.enabled, dims: dimensions.group.visible,
         section: section.enabled, sectionAxis: section.axis, xr: renderer.xr.isPresenting,
+        remote: remote.available,
     });
     document.getElementById('status').textContent = lines.join('\n');
+    // PIN-Feld auf der Seite nur, solange der Rückkanal fehlt (im Headset gibt es den Ziffernblock)
+    document.getElementById('pair').hidden = remote.available || remote.state === 'unknown' || renderer.xr.isPresenting;
 }
 
 function setStatus(text, opts) {
@@ -556,12 +846,29 @@ function applyDisplayMode() {
 function connectEvents() {
     if (!window.EventSource) return;
     const es = new EventSource('./events');
-    es.onopen = () => { sseConnected = true; checkForUpdates(); };
+    es.onopen = () => {
+        sseConnected = true;
+        checkForUpdates();
+        remote.check().then(() => { refreshParams(); updateMenu(); });
+    };
     es.onerror = () => { sseConnected = false; };
     es.addEventListener('exporting', () => setStatus('Fusion exportiert...'));
     es.addEventListener('scene', () => checkForUpdates());
     // Eigener Name, weil 'error' bei EventSource für Verbindungsfehler reserviert ist
     es.addEventListener('exporterror', e => setStatus(JSON.parse(e.data).message, { sticky: true, error: true }));
+    es.addEventListener('selection', e => {
+        const d = JSON.parse(e.data);
+        setSelection(d.paths, d.origin);
+    });
+    es.addEventListener('params', e => setParams(JSON.parse(e.data)));
+    es.addEventListener('commanderror', e => {
+        const d = JSON.parse(e.data);
+        if (d.command === 'param') {
+            for (const [name, local] of paramLocal) if (local.pending) paramLocal.delete(name);
+            refreshParams();
+        }
+        setStatus(d.message, { error: true });
+    });
 }
 
 async function checkForUpdates() {
@@ -662,6 +969,7 @@ function setContent(obj, meta) {
         measure.clear();
     }
     highlight.visible = false;
+    selectionView.clear();
     while (content.children.length) {
         const old = content.children[0];
         content.remove(old);
@@ -681,7 +989,7 @@ function setContent(obj, meta) {
 
     bodyNodes = collectBodyNodes(obj);
     exploder.prepare(bodyNodes);
-    applyBodyVisibility();
+    applySelection(false);
     measure.remap(key => bodyNodes.find(n => bodyKey(n) === key));
     applyDisplayMode();
     section.setBox(sectionBox());
@@ -751,8 +1059,12 @@ function handleButtons() {
         const prev = prevButtons.get(source) || [];
         // Nur auf das Drücken reagieren, nicht solange die Taste gehalten wird
         const pressed = idx => buttons[idx] && buttons[idx].pressed && !prev[idx];
-        if (pressed(BTN_RESET)) resetView();
         if (pressed(BTN_MENU)) toggleMenu();
+        if (pressed(BTN_BODY)) {
+            const p = pointers.find(q => q.source === source);
+            if (source.handedness === 'left') hideBodies(p);
+            else isolateBodies(p);
+        }
         prevButtons.set(source, buttons.map(b => b.pressed));
     }
 }
@@ -810,6 +1122,7 @@ function render() {
     updateWristButton();
     let hover = null;
     for (const p of pointers) {
+        updatePinch(p);
         updatePointer(p);
         if (p.hit && p.hit.kind === 'menu') {
             const b = menu.buttonAt(p.hit.uv);
@@ -822,6 +1135,7 @@ function render() {
     updateHighlight();
 
     section.update();
+    selectionView.update(camera, section.enabled ? sectionPlanes : null);
     measure.update(unitToMm());
     dimensions.update(content.position, modelGroup.scale.x);
     shadows.update(modelBox, renderer.xr.isPresenting);

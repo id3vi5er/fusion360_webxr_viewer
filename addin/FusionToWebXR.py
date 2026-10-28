@@ -6,7 +6,11 @@ import functools
 import http.server
 import importlib
 import json
+import math
 import os
+import queue
+import re
+import secrets
 import shutil
 import socket
 import ssl
@@ -36,10 +40,14 @@ CMD_SETTINGS_ID = 'cmdSettings_Standalone'
 PANEL_ID = 'pnlWebXR_Standalone'
 TAB_ID = 'ToolsTab'
 AUTO_EXPORT_EVENT_ID = 'FusionToWebXR_AutoExport'
+COMMAND_EVENT_ID = 'FusionToWebXR_Command'
+CMD_APPLY_PARAM_ID = 'FusionToWebXR_ApplyParam'   # versteckter Befehl: Parameter als ein Rückgängig-Schritt
 
 # Auto-Export: so lange nach dem letzten abgeschlossenen Befehl warten
 AUTO_EXPORT_DELAY = 1.5
 SSE_HEARTBEAT = 15
+SSE_BACKLOG = 32                # so viele Ereignisse holt ein kurz abgehängter Client nach
+MAX_POST_BYTES = 64 * 1024
 
 DEFAULT_SETTINGS = {'format': 'glb', 'quality': 'normal', 'autoExport': True}
 QUALITY_LABELS = [('low', 'Grob'), ('normal', 'Normal'), ('high', 'Fein'), ('veryhigh', 'Sehr fein')]
@@ -70,6 +78,46 @@ def save_settings(settings):
         json.dump(_settings, f, indent=1)
 
 
+def command_key():
+    """Schlüssel für den Rückkanal. Bleibt über Neustarts gleich, damit ein Lesezeichen in der Brille gilt."""
+    settings = load_settings()
+    if not settings.get('commandKey'):
+        save_settings(dict(settings, commandKey=secrets.token_urlsafe(8)))
+    return _settings['commandKey']
+
+
+def pair_pin():
+    """Vierstellige PIN, mit der die Brille den Schlüssel abholt (statt den Link abzutippen)."""
+    settings = load_settings()
+    if not settings.get('pairPin'):
+        save_settings(dict(settings, pairPin=f'{secrets.randbelow(10000):04d}'))
+    return _settings['pairPin']
+
+
+# Gegen Durchprobieren: nach PAIR_MAX_FAILS Fehlversuchen PAIR_LOCK_SECONDS gesperrt.
+# 10 000 PINs bei 5 Versuchen pro Minute dauern im Mittel über 16 Stunden.
+PAIR_MAX_FAILS = 5
+PAIR_LOCK_SECONDS = 60
+_pair_lock = threading.Lock()
+_pair_state = {'fails': 0, 'until': 0.0}
+
+
+def try_pair(pin):
+    """Gibt (status, antwort) zurück; bei Erfolg enthält die Antwort den Schlüssel."""
+    with _pair_lock:
+        wait = _pair_state['until'] - time.time()
+        if wait > 0:
+            return 429, {'error': f'Zu viele Versuche – in {int(wait) + 1} s erneut', 'retryAfter': int(wait) + 1}
+        if isinstance(pin, str) and secrets.compare_digest(pin, pair_pin()):
+            _pair_state['fails'] = 0
+            return 200, {'key': command_key()}
+        _pair_state['fails'] += 1
+        if _pair_state['fails'] >= PAIR_MAX_FAILS:
+            _pair_state['fails'] = 0
+            _pair_state['until'] = time.time() + PAIR_LOCK_SECONDS
+        return 403, {'error': 'PIN falsch'}
+
+
 def log(text):
     # Ins Textbefehle-Fenster von Fusion statt Dialoge beim Auto-Export
     try:
@@ -84,15 +132,21 @@ def log(text):
 # Server-Sent Events: Fusion meldet neue Exporte direkt an die Brille
 # -----------------------------------------------------------------------------
 _sse_cond = threading.Condition()
-_sse_state = {'seq': 0, 'event': None, 'data': '{}', 'stopping': False}
+_sse_state = {'seq': 0, 'log': [], 'stopping': False}
+# Zustandsereignisse: ein neu verbundener Client bekommt den letzten Stand sofort
+STICKY_EVENTS = ('selection', 'params')
+_sse_sticky = {}
 
 
 def broadcast(event, data):
-    """Thread-sicher; verbundene Clients erhalten nur das jeweils neueste Ereignis."""
+    """Thread-sicher; Clients holen alle Ereignisse seit ihrem letzten Stand nach (bis SSE_BACKLOG)."""
+    payload = json.dumps(data, ensure_ascii=False)
     with _sse_cond:
         _sse_state['seq'] += 1
-        _sse_state['event'] = event
-        _sse_state['data'] = json.dumps(data, ensure_ascii=False)
+        _sse_state['log'].append((_sse_state['seq'], event, payload))
+        del _sse_state['log'][:-SSE_BACKLOG]
+        if event in STICKY_EVENTS:
+            _sse_sticky[event] = payload
         _sse_cond.notify_all()
 
 
@@ -130,6 +184,47 @@ class CORSSSLRequestHandler(http.server.SimpleHTTPRequestHandler):
         else:
             super().do_GET()
 
+    def do_POST(self):
+        # Rückkanal: nur mit Schlüssel. Der eigene Header erzwingt bei fremden Seiten einen
+        # CORS-Preflight, den wir nicht erlauben – POST geht also nur von der eigenen Seite.
+        path = self.path.split('?')[0]
+        if not path.startswith('/api/'):
+            return self.send_json(404, {'error': 'unbekannt'})
+        if path == '/api/pair':
+            # Einziger Befehl ohne Schlüssel: tauscht die PIN gegen den Schlüssel
+            try:
+                length = min(int(self.headers.get('Content-Length', 0)), 1024)
+                pin = json.loads(self.rfile.read(length) or b'{}').get('pin')
+            except (ValueError, OSError, AttributeError):
+                return self.send_json(400, {'error': 'ungültiges JSON'})
+            return self.send_json(*try_pair(pin))
+        if not secrets.compare_digest(self.headers.get('X-FXR-Key', ''), command_key()):
+            return self.send_json(403, {'error': 'Schlüssel fehlt oder falsch'})
+        name = path[len('/api/'):]
+        if name == 'check':
+            return self.send_json(200, {'ok': True})
+        if name not in COMMAND_HANDLERS:
+            return self.send_json(404, {'error': f'Befehl {name} unbekannt'})
+        try:
+            length = int(self.headers.get('Content-Length', 0))
+            if length > MAX_POST_BYTES:
+                return self.send_json(413, {'error': 'zu groß'})
+            body = json.loads(self.rfile.read(length) or b'{}')
+        except (ValueError, OSError):
+            return self.send_json(400, {'error': 'ungültiges JSON'})
+        # Ausführung im Hauptthread – der Server-Thread fasst die Fusion-API nie an
+        _commands.put((name, body))
+        adsk.core.Application.get().fireCustomEvent(COMMAND_EVENT_ID, '')
+        self.send_json(202, {'ok': True})
+
+    def send_json(self, status, data):
+        raw = json.dumps(data, ensure_ascii=False).encode('utf-8')
+        self.send_response(status)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
     def serve_events(self):
         self.close_connection = True
         self.send_response(200)
@@ -137,19 +232,20 @@ class CORSSSLRequestHandler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
         with _sse_cond:
             seq = _sse_state['seq']
+            initial = [(e, _sse_sticky[e]) for e in STICKY_EVENTS if e in _sse_sticky]
         try:
-            self.wfile.write(b'retry: 2000\n\n')
+            msg = 'retry: 2000\n\n' + ''.join(f'event: {e}\ndata: {d}\n\n' for e, d in initial)
+            self.wfile.write(msg.encode('utf-8'))
             self.wfile.flush()
             while True:
                 with _sse_cond:
                     _sse_cond.wait_for(lambda: _sse_state['seq'] != seq or _sse_state['stopping'], timeout=SSE_HEARTBEAT)
                     if _sse_state['stopping']:
                         return
-                    changed = _sse_state['seq'] != seq
+                    pending = [(e, d) for s, e, d in _sse_state['log'] if s > seq]
                     seq = _sse_state['seq']
-                    event, data = _sse_state['event'], _sse_state['data']
                 # Ohne Änderung ein Kommentar als Heartbeat, damit tote Verbindungen auffallen
-                msg = f'event: {event}\ndata: {data}\n\n' if changed else ': ping\n\n'
+                msg = ''.join(f'event: {e}\ndata: {d}\n\n' for e, d in pending) or ': ping\n\n'
                 self.wfile.write(msg.encode('utf-8'))
                 self.wfile.flush()
         except (OSError, ssl.SSLError):
@@ -263,6 +359,12 @@ def url_list():
     return "".join(f"- https://{ip}:{SERVER_PORT}\n" for ip in get_all_ips())
 
 
+def pair_hint():
+    # Erst mit der PIN darf die Brille Auswahl und Parameter an Fusion schicken
+    return (f"\nPIN für den Rückkanal: {pair_pin()}\n"
+            "(in der Brille: Menü → Parameter → „Mit PIN koppeln“)\n")
+
+
 # -----------------------------------------------------------------------------
 # Export
 # -----------------------------------------------------------------------------
@@ -314,6 +416,7 @@ def run_export(design, settings):
     if meta:
         _auto['fingerprint'] = design_fingerprint(design)
         broadcast('scene', {'version': meta['version']})
+        broadcast('params', user_params(design))
     else:
         broadcast('exporterror', {'message': 'Export fehlgeschlagen'})
     return meta
@@ -332,7 +435,8 @@ def design_fingerprint(design):
 
     Fängt auch Parameteränderungen ab, die weder Timeline noch Hüllquader verändern.
     """
-    parts = [design.parentDocument.name if design.parentDocument else '']
+    parts = [design.parentDocument.name if design.parentDocument else '',
+             tuple((p.name, p.expression) for p in _user_parameters(design))]
     for occ_bodies in _visible_body_lists(design.rootComponent):
         for body in occ_bodies:
             if not body.isVisible:
@@ -390,6 +494,226 @@ def auto_export():
 
 
 # -----------------------------------------------------------------------------
+# Rückkanal: Befehle der Brille (Auswahl, Parameter)
+# -----------------------------------------------------------------------------
+# Server-Thread: POST /api/<name> -> Queue -> Custom Event -> process_commands() im Hauptthread
+_commands = queue.Queue()
+_selection = {'paths': None, 'expected': None}
+_param_pending = []
+
+
+class CommandError(Exception):
+    """Fehler, der als Meldung an die Brille geht (kein Traceback)."""
+
+
+def active_design():
+    design = adsk.fusion.Design.cast(adsk.core.Application.get().activeProduct)
+    if not design:
+        raise CommandError('Kein aktives Design in Fusion')
+    return design
+
+
+def ensure_idle():
+    # Ein laufender Fusion-Befehl (z. B. offener Extrusionsdialog) würde sonst abgebrochen
+    if adsk.core.Application.get().userInterface.activeCommand != 'SelectCommand':
+        raise CommandError('Fusion ist beschäftigt – erst den offenen Befehl beenden')
+
+
+def process_commands():
+    while True:
+        try:
+            name, body = _commands.get_nowait()
+        except queue.Empty:
+            return
+        try:
+            COMMAND_HANDLERS[name](body)
+        except CommandError as e:
+            broadcast('commanderror', {'command': name, 'message': str(e)})
+        except Exception:
+            log(f'Befehl {name} fehlgeschlagen:\n' + traceback.format_exc())
+            broadcast('commanderror', {'command': name, 'message': f'Befehl {name} fehlgeschlagen'})
+
+
+# --- Körper <-> Pfad (wie im GLB: Wurzel/Occurrence:1/.../Körper) -----------------
+# entityToken ist laut Doku nicht stabil, der Pfad schon (solange nichts umbenannt wird)
+def body_path(design, body):
+    occ = body.assemblyContext
+    names = occ.fullPathName.split('+') if occ else []
+    return '/'.join([design.rootComponent.name] + names + [body.name])
+
+
+class BodyLookup:
+    def __init__(self, design):
+        self.root = design.rootComponent
+        self.occs = None
+
+    def find(self, path):
+        parts = path.split('/')
+        if len(parts) < 2:
+            return None
+        names, body_name = parts[1:-1], parts[-1]
+        if names:
+            if self.occs is None:
+                self.occs = {o.fullPathName: o for o in self.root.allOccurrences}
+            occ = self.occs.get('+'.join(names))
+            if not occ:
+                return None
+            return occ.bRepBodies.itemByName(body_name)
+        return self.root.bRepBodies.itemByName(body_name)
+
+
+def _occurrence_bodies(occ):
+    yield from occ.bRepBodies
+    for child in occ.childOccurrences:
+        yield from _occurrence_bodies(child)
+
+
+def selection_paths(design):
+    """Aktuelle Fusion-Auswahl als Körperpfade: Fläche/Kante/Punkt -> Körper, Occurrence -> alle Körper darunter."""
+    paths = []
+    selections = adsk.core.Application.get().userInterface.activeSelections
+    for i in range(selections.count):
+        entity = selections.item(i).entity
+        bodies = []
+        if adsk.fusion.BRepBody.cast(entity):
+            bodies = [entity]
+        elif adsk.fusion.Occurrence.cast(entity):
+            bodies = _occurrence_bodies(entity)
+        else:
+            for cls in (adsk.fusion.BRepFace, adsk.fusion.BRepEdge, adsk.fusion.BRepVertex):
+                sub = cls.cast(entity)
+                if sub:
+                    bodies = [sub.body]
+                    break
+        for body in bodies:
+            path = body_path(design, body)
+            if path not in paths:
+                paths.append(path)
+    return paths
+
+
+def broadcast_selection(design):
+    paths = selection_paths(design)
+    if paths == _selection['paths']:
+        return
+    _selection['paths'] = paths
+    # Kam die Auswahl aus der Brille, braucht sie dort keinen Hinweis
+    origin = 'viewer' if _selection['expected'] is not None and set(paths) == _selection['expected'] else 'fusion'
+    _selection['expected'] = None
+    broadcast('selection', {'paths': paths, 'origin': origin})
+
+
+def cmd_select(body):
+    design = active_design()
+    ensure_idle()
+    paths = [p for p in body.get('paths', []) if isinstance(p, str)]
+    mode = body.get('mode', 'replace')
+    if mode not in ('replace', 'add', 'remove'):
+        raise CommandError(f'Unbekannter Auswahlmodus {mode}')
+    selections = adsk.core.Application.get().userInterface.activeSelections
+    lookup = BodyLookup(design)
+    found = [(p, lookup.find(p)) for p in paths]
+    missing = [p for p, b in found if not b]
+    current = set(selection_paths(design)) if mode != 'replace' else set()
+    if mode == 'remove':
+        _selection['expected'] = current - set(paths)
+    else:
+        _selection['expected'] = current | {p for p, b in found if b}
+    if mode == 'replace':
+        selections.clear()
+    for _, b in found:
+        if not b:
+            continue
+        if mode == 'remove':
+            selections.removeByEntity(b)
+        else:
+            selections.add(b)
+    broadcast_selection(design)
+    if missing:
+        raise CommandError(f'{len(missing)} Körper nicht gefunden (umbenannt?)')
+
+
+# --- Benutzerparameter ----------------------------------------------------------
+PARAM_RANGE_RE = re.compile(r'\[\s*(-?\d+(?:[.,]\d+)?)\s*\.\.\s*(-?\d+(?:[.,]\d+)?)\s*\]')
+PARAM_STEPS = {'mm': 0.5, 'cm': 0.05, 'm': 0.0005, 'in': 0.01, 'ft': 0.001, 'deg': 1.0, 'rad': 0.01}
+NUMBER_EXPR_RE = re.compile(r'^\s*-?\d+(?:[.,]\d+)?(?:\s*[a-zA-Z"\']+)?\s*$')
+
+
+def _param_info(design, p):
+    um = design.unitsManager
+    unit = p.unit
+    factor = um.evaluateExpression('1 ' + unit, unit) if unit else 1.0
+    value = p.value / factor if factor else p.value
+    # Nur reine Zahlenwerte als Regler – Formeln mit Bezügen bleiben Anzeige
+    editable = bool(NUMBER_EXPR_RE.match(p.expression))
+    m = PARAM_RANGE_RE.search(p.comment or '')
+    if m:
+        lo, hi = sorted(float(v.replace(',', '.')) for v in m.groups())
+    else:
+        span = abs(value) * 0.5 or 10.0
+        lo, hi = value - span, value + span
+    step = PARAM_STEPS.get(unit)
+    if step is None:
+        step = 1.0 if not unit and float(value).is_integer() else (hi - lo) / 100 or 0.01
+    # Grenzen auf das Raster runden, damit beide Enden erreichbar sind
+    lo, hi = math.floor(lo / step + 1e-9) * step, math.ceil(hi / step - 1e-9) * step
+    return {'name': p.name, 'expression': p.expression, 'value': round(value, 6), 'unit': unit,
+            'comment': p.comment, 'editable': editable,
+            'min': round(lo, 6), 'max': round(hi, 6), 'step': step}
+
+
+def _user_parameters(design):
+    # Direktmodellierung hat keine Parameter – der Zugriff wirft dort einen Fehler
+    if design.designType != adsk.fusion.DesignTypes.ParametricDesignType:
+        return []
+    return design.userParameters
+
+
+def user_params(design):
+    result = []
+    for p in _user_parameters(design):
+        try:
+            result.append(_param_info(design, p))
+        except Exception:
+            pass  # z. B. Textparameter
+    return result
+
+
+def _timeline_problems(design):
+    # Auch Warnungen zählen: eine Skizze, die sich nicht lösen lässt, ist nur eine Warnung
+    if design.designType != adsk.fusion.DesignTypes.ParametricDesignType:
+        return 0
+    healthy = adsk.fusion.FeatureHealthStates.HealthyFeatureHealthState
+    return sum(1 for item in design.timeline if item.healthState != healthy)
+
+
+def cmd_param(body):
+    design = active_design()
+    ensure_idle()
+    name, value = body.get('name'), body.get('value')
+    if design.designType != adsk.fusion.DesignTypes.ParametricDesignType:
+        raise CommandError('Design ohne Zeitleiste (Direktmodellierung) – keine Parameter')
+    param = design.userParameters.itemByName(name) if isinstance(name, str) else None
+    if not param:
+        raise CommandError(f'Parameter {name} nicht gefunden')
+    if not isinstance(value, (int, float)) or value != value or abs(value) > 1e9:
+        raise CommandError('Ungültiger Wert')
+    if not NUMBER_EXPR_RE.match(param.expression):
+        raise CommandError(f'{name} ist eine Formel und kann nur in Fusion geändert werden')
+    _param_pending.append((name, float(value)))
+    # Über einen versteckten Befehl, damit die Änderung ein Schritt in der Rückgängig-Liste ist
+    adsk.core.Application.get().userInterface.commandDefinitions.itemById(CMD_APPLY_PARAM_ID).execute()
+
+
+def format_expression(value, unit):
+    text = f'{value:.6f}'.rstrip('0').rstrip('.')
+    return f'{text} {unit}' if unit else text
+
+
+COMMAND_HANDLERS = {'select': cmd_select, 'param': cmd_param}
+
+
+# -----------------------------------------------------------------------------
 # Fusion 360 Command Handlers
 # -----------------------------------------------------------------------------
 class StartServerCommandExecuteHandler(adsk.core.CommandEventHandler):
@@ -400,7 +724,7 @@ class StartServerCommandExecuteHandler(adsk.core.CommandEventHandler):
         ui = app.userInterface
         try:
             if SERVER_HTTPD:
-                ui.messageBox("Server läuft bereits.\n\nMögliche URLs:\n" + url_list())
+                ui.messageBox("Server läuft bereits.\n\nMögliche URLs:\n" + url_list() + pair_hint())
                 return
             error = start_server()
             if error:
@@ -410,7 +734,7 @@ class StartServerCommandExecuteHandler(adsk.core.CommandEventHandler):
                 _auto['fingerprint'] = None
                 schedule_auto_export()
                 auto_hint = "\nAuto-Export ist aktiv.\n" if load_settings().get('autoExport') else ""
-                ui.messageBox("Server gestartet!\n\nMögliche URLs:\n" + url_list() + auto_hint +
+                ui.messageBox("Server gestartet!\n\nMögliche URLs:\n" + url_list() + pair_hint() + auto_hint +
                               "\n(Zertifikat im Browser akzeptieren!)")
         except:
             ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
@@ -506,6 +830,63 @@ class AutoExportEventHandler(adsk.core.CustomEventHandler):
         except:
             log('Auto-Export fehlgeschlagen:\n' + traceback.format_exc())
 
+class RemoteCommandEventHandler(adsk.core.CustomEventHandler):
+    def __init__(self):
+        super().__init__()
+    def notify(self, args):
+        try:
+            process_commands()
+        except:
+            log('Befehl aus der Brille fehlgeschlagen:\n' + traceback.format_exc())
+
+class SelectionChangedHandler(adsk.core.ActiveSelectionEventHandler):
+    def __init__(self):
+        super().__init__()
+    def notify(self, args):
+        if not SERVER_HTTPD:
+            return
+        try:
+            design = adsk.fusion.Design.cast(adsk.core.Application.get().activeProduct)
+            if design:
+                broadcast_selection(design)
+        except:
+            log(traceback.format_exc())
+
+class ApplyParamExecuteHandler(adsk.core.CommandEventHandler):
+    def __init__(self):
+        super().__init__()
+    def notify(self, args):
+        design = adsk.fusion.Design.cast(adsk.core.Application.get().activeProduct)
+        items = list(_param_pending)
+        _param_pending.clear()
+        if not design or not items:
+            return
+        old = {}
+        try:
+            problems_before = _timeline_problems(design)
+            for name, value in items:
+                param = design.userParameters.itemByName(name)
+                if param:
+                    old.setdefault(name, param.expression)
+                    param.expression = format_expression(value, param.unit)
+            failed = _timeline_problems(design) > problems_before
+        except Exception as e:
+            failed = str(e)
+        if failed:
+            # Selbst zurücksetzen, damit die gemeldeten Werte stimmen; executeFailed bricht
+            # zusätzlich die Transaktion ab, es bleibt kein Rückgängig-Schritt übrig
+            for name, expression in old.items():
+                try:
+                    design.userParameters.itemByName(name).expression = expression
+                except Exception:
+                    pass
+            args.executeFailed = True
+            reason = failed if isinstance(failed, str) else 'Geometrie lässt sich so nicht berechnen'
+            broadcast('commanderror', {'command': 'param', 'message': f'Parameter nicht übernommen: {reason}'})
+        broadcast('params', user_params(design))
+        # Ein Befehl leert die Fusion-Auswahl – die Brille soll das auch zeigen
+        broadcast_selection(design)
+
 class CommandCreatedEventHandler(adsk.core.CommandCreatedEventHandler):
     def __init__(self, handler_cls):
         super().__init__()
@@ -545,6 +926,10 @@ COMMANDS = [
     (CMD_EXPORT_ID, 'WebXR Export', 'Exportiert aktuelles Modell für WebXR', ExportCommandExecuteHandler),
     (CMD_SETTINGS_ID, 'WebXR Einstellungen', 'Exportformat und Tessellierung', SettingsCommandExecuteHandler),
 ]
+# Nicht im Panel; der Name erscheint in der Rückgängig-Liste
+HIDDEN_COMMANDS = [
+    (CMD_APPLY_PARAM_ID, 'WebXR-Parameter', 'Parameteränderung aus der Brille', ApplyParamExecuteHandler),
+]
 
 def run(context):
     ui = None
@@ -566,7 +951,7 @@ def run(context):
                 if not xr_panel:
                     xr_panel = panels.add(PANEL_ID, 'WebXR Streamer', 'SelectPanel', False)
 
-        for cmd_id, name, tooltip, handler_cls in COMMANDS:
+        for cmd_id, name, tooltip, handler_cls in COMMANDS + HIDDEN_COMMANDS:
             cmd_def = cmdDefs.itemById(cmd_id)
             if not cmd_def:
                 icon_dir = os.path.join(RESOURCES, cmd_id)
@@ -579,16 +964,20 @@ def run(context):
             cmd_def.commandCreated.add(onCreated)
             _handlers.append(onCreated)
 
-            if xr_panel and not xr_panel.controls.itemById(cmd_id):
+            if xr_panel and cmd_id != CMD_APPLY_PARAM_ID and not xr_panel.controls.itemById(cmd_id):
                 xr_panel.controls.addCommand(cmd_def)
 
         # Auto-Export: Änderungen erkennen und gebündelt im Hauptthread exportieren
-        try:
-            app.unregisterCustomEvent(AUTO_EXPORT_EVENT_ID)  # Rest eines abgestürzten Laufs
-        except Exception:
-            pass
+        for event_id in (AUTO_EXPORT_EVENT_ID, COMMAND_EVENT_ID):
+            try:
+                app.unregisterCustomEvent(event_id)  # Rest eines abgestürzten Laufs
+            except Exception:
+                pass
         _auto['event'] = app.registerCustomEvent(AUTO_EXPORT_EVENT_ID)
+        command_event = app.registerCustomEvent(COMMAND_EVENT_ID)
         for event, handler in ((_auto['event'], AutoExportEventHandler()),
+                               (command_event, RemoteCommandEventHandler()),
+                               (ui.activeSelectionChanged, SelectionChangedHandler()),
                                (ui.commandTerminated, CommandTerminatedHandler()),
                                (app.documentActivated, DocumentActivatedHandler())):
             event.add(handler)
@@ -610,10 +999,11 @@ def stop(context):
         for event, handler in _event_handlers:
             event.remove(handler)
         _event_handlers.clear()
-        try:
-            app.unregisterCustomEvent(AUTO_EXPORT_EVENT_ID)
-        except Exception:
-            pass
+        for event_id in (AUTO_EXPORT_EVENT_ID, COMMAND_EVENT_ID):
+            try:
+                app.unregisterCustomEvent(event_id)
+            except Exception:
+                pass
 
         # Remove Panel
         design_ws = ui.workspaces.itemById('FusionSolidEnvironment')
@@ -625,7 +1015,7 @@ def stop(context):
                     panel.deleteMe()
 
         # Remove Commands
-        for cmd_id, _, _, _ in COMMANDS:
+        for cmd_id, _, _, _ in COMMANDS + HIDDEN_COMMANDS:
             cmd_def = ui.commandDefinitions.itemById(cmd_id)
             if cmd_def:
                 cmd_def.deleteMe()

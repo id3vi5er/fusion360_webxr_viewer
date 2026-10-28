@@ -28,6 +28,12 @@ Aufwand: **S** = wenige Stunden, **M** = ein Abend bis Tag, **L** = mehrere Tage
   Schatten im Desktop-Browser geprüft. Raumanker und Raumlicht nur in der Quest prüfbar;
   beides fällt still zurück, wenn der Browser es nicht anbietet (Menü zeigt „Raumlicht“ nur,
   wenn es aktiv ist).
+- **Phase 6.0–6.3:** erledigt (2026-10-28). In Fusion mit Testinstanz und Testdokument geprüft:
+  Schlüssel (403 ohne), Auswahl in beide Richtungen (Fläche → Körper, Körper in Occurrence),
+  `add`/`remove`, Parameter setzen, Rückgängig nimmt genau die Parameteränderung zurück,
+  Formel-Parameter abgelehnt, Breite 0 mm zurückgenommen mit Meldung. Im Browser: Kanten-
+  hervorhebung, Bauteilzeile → Fusion-Auswahl, Parameterseite. Offen: Endabnahme in der Quest,
+  6.4. Nachschlagewerk für alle Funktionen: [`FEATURES.md`](FEATURES.md).
 
 Erkenntnisse aus der Umsetzung:
 - Proxy-Körper liefern ihr Netz bereits in Weltkoordinaten (cm). Der Exporter schreibt deshalb
@@ -62,6 +68,17 @@ Erkenntnisse aus der Umsetzung:
   Ereignissen werden deshalb vorgemerkt und im nächsten Frame ausgeführt. Persistente Anker
   (`requestPersistentHandle` / `restorePersistentAnchor`) werden je Dokumentname im
   `localStorage` der Brille gemerkt, zusammen mit Maßstab und Flächenhöhe.
+- Abweichend vom Plan bleibt der Schlüssel über Neustarts gleich (`settings.json`), sonst wäre
+  das Lesezeichen in der Brille nach jedem Fusion-Start ungültig.
+- SSE hielt bisher nur das neueste Ereignis; mit Auswahl, Parametern und Fehlern gingen so
+  Ereignisse verloren. Jetzt ein Puffer (32) plus Startzustand für `selection` und `params`.
+- Eine Skizze, die sich nicht lösen lässt, ist in der Zeitleiste nur eine *Warnung*. Gezählt
+  werden deshalb alle nicht gesunden Einträge vor und nach der Änderung.
+- `cmdDef.execute()` aus einem Custom Event erzeugt einen eigenen Rückgängig-Schritt; der
+  Befehl endet mit `CompletedTerminationReason`, der Auto-Export folgt also von selbst.
+- Jeder Befehl leert die Fusion-Auswahl; nach einer Parameteränderung wird die (leere)
+  Auswahl deshalb an die Brille gemeldet.
+- Fusion löst `activeSelectionChanged` auch bei Auswahl per API aus.
 
 ## Leitentscheidungen
 
@@ -155,10 +172,10 @@ Erkenntnisse aus der Umsetzung:
 
 | # | Aufgabe | Aufwand | braucht |
 |---|---|---|---|
-| 6.0 | Grundlage: Befehlskanal Brille → Fusion mit Sitzungsschlüssel | S | 2.1 |
-| 6.1 | Auswahl spiegeln Fusion → Brille | M | 6.0, 1.4 |
-| 6.2 | Auswahl Brille → Fusion | M | 6.0, 6.1 |
-| 6.3 | Benutzerparameter als Regler in VR → Fusion rechnet neu → Auto-Export | M | 6.0, 2.2, 3.1 |
+| 6.0 ✅ | Grundlage: Befehlskanal Brille → Fusion mit Sitzungsschlüssel | S | 2.1 |
+| 6.1 ✅ | Auswahl spiegeln Fusion → Brille | M | 6.0, 1.4 |
+| 6.2 ✅ | Auswahl Brille → Fusion | M | 6.0, 6.1 |
+| 6.3 ✅ | Benutzerparameter als Regler in VR → Fusion rechnet neu → Auto-Export | M | 6.0, 2.2, 3.1 |
 | 6.4 | Versionsvergleich: vorigen Export als halbtransparenten Geist einblenden | S | 1.5 |
 
 ### Detailplanung Phase 6 (Stand 2026-10-28)

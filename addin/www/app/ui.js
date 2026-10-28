@@ -10,6 +10,7 @@ const COLORS = {
     hover: '#3d434c',
     active: '#00a352',
     disabled: '#1f2227',
+    selected: '#00e5ff',    // Auswahl aus/nach Fusion
 };
 
 export function canvasMesh(width, height, metersWide) {
@@ -53,6 +54,7 @@ export function makeLabel(text, { color = '#ffffff', height = 0.022 } = {}) {
 }
 
 const BODY_ROWS = 6;
+const PARAM_ROWS = 4;
 
 // -----------------------------------------------------------------------------
 // Menü: Info oben, Reiter, darunter Schaltflächen der aktiven Seite.
@@ -70,6 +72,10 @@ export class Menu {
         this.page = 'view';
         this.bodies = [];
         this.bodyPage = 0;
+        this.params = [];
+        this.paramPage = 0;
+        this.paramHint = '';
+        this.pin = { digits: '', message: '' };
         this.buildStatic();
         this.layout();
     }
@@ -79,8 +85,8 @@ export class Menu {
     buildStatic() {
         const H = 92;
         const btn = (page, id, label, x, y, w) => ({ page, id, label, x, y, w, h: H });
-        const tabs = [['view', 'Ansicht'], ['tools', 'Werkzeuge'], ['bodies', 'Bauteile']]
-            .map(([p, label], i) => ({ id: `page:${p}`, label, x: 30 + i * 328, y: 176, w: 312, h: 76 }));
+        const tabs = [['view', 'Ansicht'], ['tools', 'Werkzeuge'], ['bodies', 'Bauteile'], ['params', 'Parameter']]
+            .map(([p, label], i) => ({ id: `page:${p}`, label, x: 30 + i * 245, y: 176, w: 229, h: 76 }));
         const row = (page, y, items, x0, w, gap = 14) =>
             items.map(([id, label], i) => btn(page, id, label, x0 + i * (w + gap), y, w));
 
@@ -88,6 +94,8 @@ export class Menu {
             view: [['Maßstab', 280], ['Ansicht', 390]],
             tools: [['Explosion', 390], ['Schnitt', 500]],
             bodies: [],
+            params: [],
+            pair: [],
         };
         this.staticButtons = [
             ...tabs,
@@ -96,25 +104,39 @@ export class Menu {
             ...row('view', 500, [['upright', 'Aufrecht'], ['shadows', 'Schatten'], ['dims', 'Maße']], 30, 309),
             ...row('view', 610, [['reset', 'Zurücksetzen'], ['close', 'Schließen']], 30, 474),
 
-            ...row('tools', 280, [['tool:grab', 'Greifen'], ['tool:place', 'Platzieren'], ['tool:measure', 'Messen'], ['section', 'Schnitt']], 30, 230),
+            ...row('tools', 280, [['tool:select', 'Auswählen'], ['tool:place', 'Platzieren'], ['tool:measure', 'Messen'], ['section', 'Schnitt']], 30, 230),
             { page: 'tools', id: 'explode', kind: 'slider', x: 230, y: 400, w: 764, h: 72 },
             ...row('tools', 500, [['axis:x', 'X'], ['axis:y', 'Y'], ['axis:z', 'Z'], ['flip', 'Umdrehen']], 230, 176),
             ...row('tools', 610, [['clearMeasure', 'Messungen löschen'], ['close', 'Schließen']], 30, 474),
 
             ...row('bodies', 652, [['bodies:prev', '◀'], ['bodies:next', '▶'], ['bodies:all', 'Alle zeigen']], 30, 200),
+            ...row('params', 652, [['params:prev', '◀'], ['params:next', '▶']], 30, 200),
+            { page: 'params', id: 'pair:open', label: 'Mit PIN koppeln', x: 474, y: 652, w: 520, h: H },
+
+            // Kopplung: Ziffernblock rechts, Anzeige links
+            ...[['1', '2', '3'], ['4', '5', '6'], ['7', '8', '9'], ['del', '0', 'ok']].flatMap((keys, r) =>
+                keys.map((k, c) => ({ page: 'pair', id: `pin:${k}`, label: k === 'del' ? '⌫' : k === 'ok' ? 'OK' : k,
+                    x: 430 + c * 194, y: 270 + r * 92, w: 176, h: 80 }))),
+            { page: 'pair', id: 'pin:cancel', label: 'Zurück', x: 30, y: 652, w: 200, h: H },
         ];
     }
 
-    // Bauteilzeilen hängen von Liste und Seite ab
+    // Bauteil- und Parameterzeilen hängen von Liste und Seite ab
     layout() {
         const rows = [];
         const start = this.bodyPage * BODY_ROWS;
         this.bodies.slice(start, start + BODY_ROWS).forEach((b, i) => {
             const y = 270 + i * 62;
             const idx = start + i;
-            rows.push({ page: 'bodies', id: `body:hover:${idx}`, kind: 'row', label: b.name, sub: b.sub, x: 30, y, w: 640, h: 54, body: idx });
+            rows.push({ page: 'bodies', id: `body:hover:${idx}`, kind: 'row', label: b.name, sub: b.sub, x: 30, y, w: 640, h: 54, body: idx, selected: b.selected });
             rows.push({ page: 'bodies', id: `body:toggle:${idx}`, label: b.visible ? 'An' : 'Aus', x: 684, y, w: 140, h: 54, body: idx, on: b.visible });
             rows.push({ page: 'bodies', id: `body:solo:${idx}`, label: 'Nur', x: 838, y, w: 156, h: 54, body: idx, on: b.solo });
+        });
+        const pStart = this.paramPage * PARAM_ROWS;
+        this.params.slice(pStart, pStart + PARAM_ROWS).forEach((p, i) => {
+            if (!p.editable) return;
+            const idx = pStart + i;
+            rows.push({ page: 'params', id: `param:${idx}`, kind: 'slider', param: idx, x: 400, y: 270 + i * 92, w: 594, h: 76 });
         });
         this.buttons = [...this.staticButtons, ...rows];
     }
@@ -148,11 +170,37 @@ export class Menu {
         this.draw();
     }
 
+    // params: [{ name, valueText, t (0..1), editable, note }]; hint steht, wenn die Liste leer ist
+    setParams(params, hint = '') {
+        this.params = params;
+        this.paramHint = hint;
+        this.paramPage = Math.min(this.paramPage, Math.max(0, Math.ceil(params.length / PARAM_ROWS) - 1));
+        this.layout();
+        if (this.visible) this.draw();
+    }
+
+    setPin(digits, message = '') {
+        this.pin = { digits, message };
+        if (this.visible) this.draw();
+    }
+
+    // Kopplungsknopf nur, solange der Rückkanal fehlt
+    isHidden(b) {
+        return b.id === 'pair:open' && !!this.state.remote;
+    }
+
+    flipParamPage(delta) {
+        const pages = Math.max(1, Math.ceil(this.params.length / PARAM_ROWS));
+        this.paramPage = (this.paramPage + delta + pages) % pages;
+        this.layout();
+        this.draw();
+    }
+
     // Liefert { id, value } – value nur bei Reglern (0..1)
     buttonAt(uv) {
         const x = uv.x * this.canvas.width;
         const y = (1 - uv.y) * this.canvas.height;
-        const b = this.buttons.find(b => (!b.page || b.page === this.page) &&
+        const b = this.buttons.find(b => (!b.page || b.page === this.page) && !this.isHidden(b) &&
             x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h);
         if (!b) return null;
         return b.kind === 'slider' ? { id: b.id, value: THREE.MathUtils.clamp((x - b.x) / b.w, 0, 1) } : { id: b.id, body: b.body };
@@ -214,10 +262,12 @@ export class Menu {
             ctx.fillText(`Seite ${this.bodyPage + 1} / ${pages} · ${this.bodies.length} Körper`, 690, 708);
             if (!this.bodies.length) ctx.fillText('Keine Körper geladen', 30, 320);
         }
+        if (this.page === 'params') this.drawParams();
+        if (this.page === 'pair') this.drawPin();
 
         for (const b of this.buttons) {
-            if (b.page && b.page !== this.page) continue;
-            if (b.kind === 'slider') { this.drawSlider(b); continue; }
+            if ((b.page && b.page !== this.page) || this.isHidden(b)) continue;
+            if (b.kind === 'slider') { b.param !== undefined ? this.drawParamSlider(b) : this.drawSlider(b); continue; }
             const disabled = this.isDisabled(b);
             ctx.fillStyle = disabled ? COLORS.disabled
                 : this.isActive(b) ? COLORS.active
@@ -225,8 +275,14 @@ export class Menu {
             roundRect(ctx, b.x, b.y, b.w, b.h, 16);
             ctx.fillStyle = disabled ? '#555a61' : COLORS.text;
             if (b.kind === 'row') {
+                // In Fusion ausgewählt: Akzentbalken links
+                if (b.selected) {
+                    ctx.fillStyle = COLORS.selected;
+                    roundRect(ctx, b.x, b.y, 10, b.h, 5);
+                    ctx.fillStyle = COLORS.text;
+                }
                 ctx.font = '30px sans-serif';
-                ctx.fillText(b.label, b.x + 18, b.y + 37, b.w - 36);
+                ctx.fillText(b.label, b.x + 24, b.y + 37, b.w - 42);
                 continue;
             }
             ctx.textAlign = 'center';
@@ -251,6 +307,67 @@ export class Menu {
         ctx.fillStyle = COLORS.dim;
         ctx.font = '28px sans-serif';
         ctx.fillText(`${Math.round(v * 100)} %`, 30, b.y + b.h / 2 + 46);
+    }
+
+    drawParams() {
+        const { ctx } = this;
+        const start = this.paramPage * PARAM_ROWS;
+        this.params.slice(start, start + PARAM_ROWS).forEach((p, i) => {
+            const y = 270 + i * 92;
+            ctx.fillStyle = COLORS.text;
+            ctx.font = 'bold 32px sans-serif';
+            ctx.fillText(p.name, 30, y + 34, p.editable ? 350 : 964);
+            ctx.font = '28px sans-serif';
+            ctx.fillStyle = p.note ? COLORS.accent : COLORS.dim;
+            ctx.fillText(p.valueText + (p.note ? ` · ${p.note}` : ''), 30, y + 68, p.editable ? 350 : 964);
+        });
+        ctx.fillStyle = COLORS.dim;
+        ctx.font = '32px sans-serif';
+        if (!this.params.length) ctx.fillText(this.paramHint || 'Keine Benutzerparameter im Design', 30, 320, 964);
+        const pages = Math.max(1, Math.ceil(this.params.length / PARAM_ROWS));
+        if (this.state.remote) ctx.fillText(`Seite ${this.paramPage + 1} / ${pages} · ${this.params.length} Parameter`, 480, 708);
+    }
+
+    drawPin() {
+        const { ctx } = this;
+        ctx.fillStyle = COLORS.text;
+        ctx.font = 'bold 34px sans-serif';
+        ctx.fillText('PIN aus Fusion', 30, 310);
+        for (let i = 0; i < 4; i++) {
+            const x = 30 + i * 92;
+            ctx.fillStyle = COLORS.button;
+            roundRect(ctx, x, 340, 76, 96, 14);
+            const d = this.pin.digits[i];
+            if (d) {
+                ctx.fillStyle = COLORS.text;
+                ctx.font = 'bold 60px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.fillText(d, x + 38, 410);
+                ctx.textAlign = 'left';
+            }
+        }
+        ctx.font = '28px sans-serif';
+        ctx.fillStyle = COLORS.dim;
+        ctx.fillText('Steht in der Meldung', 30, 490, 380);
+        ctx.fillText('„Server gestartet“', 30, 524, 380);
+        if (this.pin.message) {
+            ctx.fillStyle = this.pin.message.startsWith('✓') ? COLORS.accent : '#ff6b6b';
+            ctx.fillText(this.pin.message, 30, 590, 380);
+        }
+    }
+
+    drawParamSlider(b) {
+        const { ctx } = this;
+        const v = this.params[b.param].t;
+        const cy = b.y + b.h / 2;
+        ctx.fillStyle = b.id === this.hovered ? COLORS.hover : COLORS.button;
+        roundRect(ctx, b.x, cy - 10, b.w, 20, 10);
+        ctx.fillStyle = COLORS.active;
+        roundRect(ctx, b.x, cy - 10, Math.max(20, b.w * v), 20, 10);
+        ctx.beginPath();
+        ctx.arc(b.x + b.w * v, cy, 26, 0, Math.PI * 2);
+        ctx.fillStyle = COLORS.text;
+        ctx.fill();
     }
 
     // Vor dem Kopf im Raum platzieren (weltfest, damit man mit dem Strahl zielen kann)
